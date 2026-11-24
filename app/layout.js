@@ -1,5 +1,6 @@
 import './globals.css';
 import PwaManager from '../components/PwaManager';
+import CallProvider from '../components/CallProvider';
 
 export const metadata = {
   title: 'rzchat',
@@ -27,7 +28,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="id">
       <body className="m-0 p-0 w-full min-h-[100dvh] overflow-x-hidden antialiased">
-        {children}
+        <CallProvider>{children}</CallProvider>
         <PwaManager />
       </body>
     </html>
