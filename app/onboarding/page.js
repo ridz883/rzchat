@@ -2,9 +2,11 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { User, Check, X, Loader2, MessageSquare } from 'lucide-react';
+import { User, Check, X, Loader2, MessageSquare, AlertCircle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useTheme } from '../../lib/useTheme';
+
+const exchangedCodes = new Set();
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -16,16 +18,22 @@ export default function OnboardingPage() {
   const [status, setStatus] = useState('idle');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState('');
   const [error, setError] = useState('');
   const handledRef = useRef(false);
 
   useEffect(() => {
-    let fallbackTimer;
+    let active = true;
+    let exchangeTimer;
 
     const processUser = async (authUser) => {
-      if (!authUser || handledRef.current) return;
+      if (!authUser || handledRef.current || !active) return;
       handledRef.current = true;
       setUser(authUser);
+
+      if (typeof window !== 'undefined' && window.location.search.includes('code=')) {
+        window.history.replaceState({}, '', '/onboarding');
+      }
 
       const { data: prof } = await supabase
         .from('profiles')
@@ -33,9 +41,10 @@ export default function OnboardingPage() {
         .eq('id', authUser.id)
         .maybeSingle();
 
-      // Kalau akun Google ini sudah pernah buat username -> otomatis langsung masuk ke chat
+      if (!active) return;
+
       if (prof?.username && prof?.onboarding_completed) {
-        router.replace('/');
+        window.location.replace('/');
         return;
       }
 
@@ -55,32 +64,61 @@ export default function OnboardingPage() {
       setLoading(false);
     };
 
-    const hasCallback =
-      typeof window !== 'undefined' &&
-      (window.location.hash.includes('access_token') ||
-        window.location.search.includes('code='));
-
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         processUser(session.user);
       }
     });
 
-    supabase.auth.getSession().then(({ data }) => {
+    const initAuth = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const urlErr = params.get('error_description') || params.get('error');
+      if (urlErr) {
+        setAuthError(decodeURIComponent(urlErr.replace(/\+/g, ' ')));
+        setLoading(false);
+        return;
+      }
+
+      const code = params.get('code');
+      const hasHashToken = window.location.hash.includes('access_token');
+
+      const { data } = await supabase.auth.getSession();
       if (data?.session?.user) {
         processUser(data.session.user);
-      } else if (!hasCallback) {
-        router.replace('/login');
-      } else {
-        // Tunggu maksimal 5 detik jika Google callback masih diproses
-        fallbackTimer = setTimeout(() => {
-          if (!handledRef.current) router.replace('/login');
-        }, 5000);
+        return;
       }
-    });
+
+      if (code) {
+        exchangeTimer = setTimeout(async () => {
+          if (handledRef.current || !active) return;
+          const { data: retrySession } = await supabase.auth.getSession();
+          if (retrySession?.session?.user) {
+            processUser(retrySession.session.user);
+            return;
+          }
+
+          if (!exchangedCodes.has(code)) {
+            exchangedCodes.add(code);
+            const { data: exData, error: exErr } = await supabase.auth.exchangeCodeForSession(code);
+            if (!active) return;
+            if (exData?.session?.user) {
+              processUser(exData.session.user);
+            } else if (exErr) {
+              setAuthError(exErr.message || 'Gagal memverifikasi sesi Google. Silakan coba lagi.');
+              setLoading(false);
+            }
+          }
+        }, 700);
+      } else if (!hasHashToken) {
+        router.replace('/login');
+      }
+    };
+
+    initAuth();
 
     return () => {
-      if (fallbackTimer) clearTimeout(fallbackTimer);
+      active = false;
+      if (exchangeTimer) clearTimeout(exchangeTimer);
       listener?.subscription?.unsubscribe();
     };
   }, [router]);
@@ -130,7 +168,7 @@ export default function OnboardingPage() {
       });
       if (upErr) throw upErr;
 
-      router.replace('/');
+      window.location.replace('/');
     } catch (err) {
       setError(err.message || 'Gagal menyimpan username.');
     } finally {
@@ -147,6 +185,35 @@ export default function OnboardingPage() {
       >
         <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
         <p className="text-xs">Memverifikasi akun Google...</p>
+      </div>
+    );
+  }
+
+  if (authError) {
+    return (
+      <div
+        className={`min-h-[100dvh] w-full flex items-center justify-center p-4 ${
+          isDark ? 'bg-[#09090B] text-zinc-100' : 'bg-zinc-100 text-zinc-900'
+        }`}
+      >
+        <div
+          className={`w-full max-w-sm rounded-2xl border p-6 text-center space-y-4 ${
+            isDark ? 'bg-[#121215] border-zinc-800' : 'bg-white border-zinc-200'
+          }`}
+        >
+          <AlertCircle className="w-8 h-8 text-red-500 mx-auto" />
+          <div className="space-y-1">
+            <h2 className="font-bold text-base">Gagal Login Google</h2>
+            <p className="text-xs text-red-500 break-words">{authError}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => router.replace('/login')}
+            className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm"
+          >
+            Kembali ke Halaman Login
+          </button>
+        </div>
       </div>
     );
   }
