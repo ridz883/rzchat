@@ -22,15 +22,14 @@ export default function LoginPage() {
   const router = useRouter();
   const { isDark, toggleTheme } = useTheme();
 
-  // step: 'email' | 'login' | 'register' | 'otp'
   const [step, setStep] = useState('email');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
-  const [usernameStatus, setUsernameStatus] = useState('idle'); // idle | checking | available | taken
-  const [otpCode, setOtpCode] = useState('');
+  const [usernameStatus, setUsernameStatus] = useState('idle');
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [infoMsg, setInfoMsg] = useState('');
   const [error, setError] = useState('');
 
@@ -56,7 +55,6 @@ export default function LoginPage() {
     });
   }, []);
 
-  // Cek ketersediaan username live saat mendaftar
   useEffect(() => {
     if (step !== 'register') return;
     const clean = username.trim().replace(/^@+/, '').toLowerCase().replace(/[^a-z0-9_]/g, '');
@@ -72,7 +70,25 @@ export default function LoginPage() {
     return () => clearTimeout(timer);
   }, [username, step]);
 
-  // Langkah 1: Cek apakah email sudah punya akun
+  // Login 1-klik pilih akun Gmail di HP
+  const handleGoogleLogin = async () => {
+    setError('');
+    setGoogleLoading(true);
+    const { error: oauthErr } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/onboarding`,
+        queryParams: {
+          prompt: 'select_account',
+        },
+      },
+    });
+    if (oauthErr) {
+      setError(oauthErr.message || 'Gagal menghubungkan ke Google.');
+      setGoogleLoading(false);
+    }
+  };
+
   const handleCheckEmail = async (e) => {
     e.preventDefault();
     const cleanEmail = email.trim().toLowerCase();
@@ -89,7 +105,6 @@ export default function LoginPage() {
       const { data: exists, error: rpcErr } = await supabase.rpc('check_email_exists', {
         p_email: cleanEmail,
       });
-
       if (rpcErr) throw rpcErr;
 
       setEmail(cleanEmail);
@@ -106,7 +121,6 @@ export default function LoginPage() {
     }
   };
 
-  // Masuk untuk email yang sudah punya akun
   const handlePasswordLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -130,7 +144,6 @@ export default function LoginPage() {
     }
   };
 
-  // Buat akun + username untuk email baru
   const handleRegister = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -181,7 +194,7 @@ export default function LoginPage() {
           password,
         });
         if (loginErr) {
-          setInfoMsg('Akun dibuat! Cek kotak masuk email kamu untuk konfirmasi lalu login.');
+          setInfoMsg('Akun dibuat! Silakan masuk.');
           setStep('login');
         } else {
           await routeAfterAuth(loginData.user.id);
@@ -192,59 +205,6 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  // Opsi login lewat Kode/Link Email (Passwordless)
-  const handleSendEmailOtp = async () => {
-    setLoading(true);
-    setError('');
-    setInfoMsg('');
-    try {
-      const { error: otpErr } = await supabase.auth.signInWithOtp({
-        email: email.trim().toLowerCase(),
-        options: {
-          emailRedirectTo: `${window.location.origin}/onboarding`,
-        },
-      });
-      if (otpErr) throw otpErr;
-      setInfoMsg('Link login / kode verifikasi telah dikirim ke email kamu.');
-      setStep('otp');
-    } catch (err) {
-      setError(err.message || 'Gagal mengirim email verifikasi.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVerifyOtp = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-    try {
-      const { data, error: verifyErr } = await supabase.auth.verifyOtp({
-        email: email.trim().toLowerCase(),
-        token: otpCode.trim(),
-        type: 'email',
-      });
-      if (verifyErr) throw verifyErr;
-      await routeAfterAuth(data.user.id);
-    } catch (err) {
-      setError('Kode OTP tidak valid atau kedaluwarsa.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Opsi Login Google (Otomatis arahkan buat username jika belum punya akun)
-  const handleGoogleLogin = async () => {
-    setError('');
-    const { error: oauthErr } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/onboarding`,
-      },
-    });
-    if (oauthErr) setError(oauthErr.message);
   };
 
   const inputClass = isDark
@@ -270,7 +230,7 @@ export default function LoginPage() {
             <div>
               <h1 className="font-bold text-lg leading-tight">rzchat</h1>
               <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                Masuk cepat menggunakan email
+                Pilih akun email untuk langsung masuk
               </p>
             </div>
           </div>
@@ -299,35 +259,55 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* STEP 1: INPUT EMAIL */}
         {step === 'email' && (
           <div className="space-y-4">
-            <form onSubmit={handleCheckEmail} className="space-y-3.5">
-              <div>
-                <label
-                  className={`block text-xs font-medium mb-1.5 ${
-                    isDark ? 'text-zinc-300' : 'text-zinc-700'
-                  }`}
-                >
-                  Alamat Email
-                </label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 text-zinc-400 absolute left-3.5 top-3" />
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="nama@gmail.com"
-                    className={inputClass}
-                  />
-                </div>
+            {/* Tombol Utama: Klik Akun Google Langsung Masuk */}
+            <button
+              type="button"
+              onClick={handleGoogleLogin}
+              disabled={googleLoading}
+              className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold text-sm flex items-center justify-center gap-2.5 shadow-sm transition"
+            >
+              {googleLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <svg className="w-4 h-4 bg-white rounded-full p-0.5" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M23.745 12.27c0-.79-.07-1.54-.19-2.27h-11.3v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"/>
+                  <path fill="#34A853" d="M12.255 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96h-3.98v3.09C3.515 21.3 7.565 24 12.255 24z"/>
+                  <path fill="#FBBC05" d="M5.525 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62h-3.98a11.86 11.86 0 000 10.76l3.98-3.09z"/>
+                  <path fill="#EA4335" d="M12.255 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C18.205 1.19 15.495 0 12.255 0c-4.69 0-8.74 2.7-10.71 6.62l3.98 3.09c.95-2.85 3.6-4.96 6.73-4.96z"/>
+                </svg>
+              )}
+              Masuk dengan Google
+            </button>
+
+            <div className="relative flex items-center py-1">
+              <div className={`flex-grow border-t ${isDark ? 'border-zinc-800' : 'border-zinc-200'}`} />
+              <span className="px-3 text-[11px] text-zinc-400">atau pakai email manual</span>
+              <div className={`flex-grow border-t ${isDark ? 'border-zinc-800' : 'border-zinc-200'}`} />
+            </div>
+
+            <form onSubmit={handleCheckEmail} className="space-y-3">
+              <div className="relative">
+                <Mail className="w-4 h-4 text-zinc-400 absolute left-3.5 top-3" />
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="nama@gmail.com"
+                  className={inputClass}
+                />
               </div>
 
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold text-sm flex items-center justify-center gap-2 transition"
+                className={`w-full py-2.5 rounded-xl border font-semibold text-sm flex items-center justify-center gap-2 transition ${
+                  isDark
+                    ? 'bg-zinc-900 border-zinc-700 hover:bg-zinc-800 text-zinc-100'
+                    : 'bg-zinc-100 border-zinc-200 hover:bg-zinc-200 text-zinc-800'
+                }`}
               >
                 {loading ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -338,28 +318,9 @@ export default function LoginPage() {
                 )}
               </button>
             </form>
-
-            <div className="relative flex items-center py-1">
-              <div className={`flex-grow border-t ${isDark ? 'border-zinc-800' : 'border-zinc-200'}`} />
-              <span className="px-3 text-[11px] text-zinc-400">atau</span>
-              <div className={`flex-grow border-t ${isDark ? 'border-zinc-800' : 'border-zinc-200'}`} />
-            </div>
-
-            <button
-              type="button"
-              onClick={handleGoogleLogin}
-              className={`w-full py-2.5 rounded-xl border font-semibold text-sm flex items-center justify-center gap-2 transition ${
-                isDark
-                  ? 'bg-zinc-900 border-zinc-700 hover:bg-zinc-800 text-zinc-100'
-                  : 'bg-white border-zinc-300 hover:bg-zinc-50 text-zinc-800'
-              }`}
-            >
-              Lanjutkan dengan Google
-            </button>
           </div>
         )}
 
-        {/* STEP 2A: EMAIL SUDAH TERDAFTAR -> MASUK */}
         {step === 'login' && (
           <form onSubmit={handlePasswordLogin} className="space-y-3.5">
             <button
@@ -375,11 +336,7 @@ export default function LoginPage() {
             </button>
 
             <div>
-              <label
-                className={`block text-xs font-medium mb-1.5 ${
-                  isDark ? 'text-zinc-300' : 'text-zinc-700'
-                }`}
-              >
+              <label className={`block text-xs font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
                 Password Akun
               </label>
               <div className="relative">
@@ -404,21 +361,9 @@ export default function LoginPage() {
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}
               Masuk
             </button>
-
-            <button
-              type="button"
-              onClick={handleSendEmailOtp}
-              disabled={loading}
-              className={`w-full py-2 rounded-xl text-xs font-medium transition ${
-                isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-zinc-600 hover:text-zinc-900'
-              }`}
-            >
-              Lupa password? Masuk pakai Link / Kode Email
-            </button>
           </form>
         )}
 
-        {/* STEP 2B: EMAIL BELUM TERDAFTAR -> WAJIB BUAT USERNAME DULU */}
         {step === 'register' && (
           <form onSubmit={handleRegister} className="space-y-3.5">
             <button
@@ -432,59 +377,34 @@ export default function LoginPage() {
               <ArrowLeft className="w-3.5 h-3.5" /> Ganti email ({email})
             </button>
 
-            <div
-              className={`p-3 rounded-xl text-xs ${
-                isDark ? 'bg-blue-500/10 text-blue-300' : 'bg-blue-50 text-blue-700'
-              }`}
-            >
-              Email ini belum memiliki akun. Buat <b>username</b> dan password dulu untuk mulai
-              mengobrol.
+            <div className={`p-3 rounded-xl text-xs ${isDark ? 'bg-blue-500/10 text-blue-300' : 'bg-blue-50 text-blue-700'}`}>
+              Email belum terdaftar. Buat <b>username</b> dan password dulu untuk mulai chat.
             </div>
 
             <div>
-              <label
-                className={`block text-xs font-medium mb-1.5 ${
-                  isDark ? 'text-zinc-300' : 'text-zinc-700'
-                }`}
-              >
+              <label className={`block text-xs font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
                 Username Unik
               </label>
               <div className="relative">
-                <span className="text-zinc-400 text-sm font-semibold absolute left-3.5 top-2.5">
-                  @
-                </span>
+                <span className="text-zinc-400 text-sm font-semibold absolute left-3.5 top-2.5">@</span>
                 <input
                   type="text"
                   required
                   autoFocus
                   value={username}
-                  onChange={(e) =>
-                    setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))
-                  }
+                  onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
                   placeholder="minimal 3 huruf/angka"
                   className={inputClass}
                 />
-                {usernameStatus === 'available' && (
-                  <Check className="w-4 h-4 text-emerald-500 absolute right-3 top-3" />
-                )}
-                {usernameStatus === 'taken' && (
-                  <X className="w-4 h-4 text-red-500 absolute right-3 top-3" />
-                )}
+                {usernameStatus === 'available' && <Check className="w-4 h-4 text-emerald-500 absolute right-3 top-3" />}
+                {usernameStatus === 'taken' && <X className="w-4 h-4 text-red-500 absolute right-3 top-3" />}
               </div>
-              {usernameStatus === 'available' && (
-                <p className="text-[11px] text-emerald-500 mt-1">Username tersedia!</p>
-              )}
-              {usernameStatus === 'taken' && (
-                <p className="text-[11px] text-red-500 mt-1">Username sudah dipakai orang lain.</p>
-              )}
+              {usernameStatus === 'available' && <p className="text-[11px] text-emerald-500 mt-1">Username tersedia!</p>}
+              {usernameStatus === 'taken' && <p className="text-[11px] text-red-500 mt-1">Username sudah dipakai.</p>}
             </div>
 
             <div>
-              <label
-                className={`block text-xs font-medium mb-1.5 ${
-                  isDark ? 'text-zinc-300' : 'text-zinc-700'
-                }`}
-              >
+              <label className={`block text-xs font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
                 Nama Tampilan
               </label>
               <div className="relative">
@@ -501,11 +421,7 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label
-                className={`block text-xs font-medium mb-1.5 ${
-                  isDark ? 'text-zinc-300' : 'text-zinc-700'
-                }`}
-              >
+              <label className={`block text-xs font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
                 Buat Password
               </label>
               <div className="relative">
@@ -529,42 +445,6 @@ export default function LoginPage() {
             >
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}
               Buat Akun & Masuk
-            </button>
-          </form>
-        )}
-
-        {/* STEP 3: VERIFIKASI OTP EMAIL */}
-        {step === 'otp' && (
-          <form onSubmit={handleVerifyOtp} className="space-y-3.5">
-            <button
-              type="button"
-              onClick={() => setStep('login')}
-              className="flex items-center gap-1.5 text-xs text-blue-600 font-medium"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" /> Kembali
-            </button>
-            <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-              Klik link login yang masuk ke <b>{email}</b>, atau masukkan kode OTP jika tersedia:
-            </p>
-            <input
-              type="text"
-              required
-              value={otpCode}
-              onChange={(e) => setOtpCode(e.target.value)}
-              placeholder="Masukkan kode OTP"
-              className={`w-full px-3.5 py-2.5 rounded-xl border text-center tracking-widest font-bold text-sm focus:outline-none ${
-                isDark
-                  ? 'bg-zinc-900 border-zinc-700 text-white'
-                  : 'bg-zinc-50 border-zinc-300 text-zinc-900'
-              }`}
-            />
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-2.5 rounded-xl bg-blue-600 text-white font-semibold text-sm flex items-center justify-center gap-2"
-            >
-              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-              Verifikasi Kode
             </button>
           </form>
         )}
