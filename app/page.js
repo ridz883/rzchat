@@ -12,7 +12,9 @@ import {
   Loader2,
   Camera,
   Check,
+  CheckCheck,
   Trash2,
+  Smartphone,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/useTheme';
@@ -42,6 +44,14 @@ const compressImageToDataUrl = (file) =>
     reader.readAsDataURL(file);
   });
 
+const formatPreviewText = (msg) => {
+  if (!msg) return '';
+  if (msg.media_type === 'audio') return '🎤 Voice Note';
+  if (msg.media_type === 'image') return msg.content ? `📷 ${msg.content}` : '📷 Foto';
+  if (msg.media_type === 'video') return msg.content ? `🎬 ${msg.content}` : '🎬 Video';
+  return msg.content || '';
+};
+
 export default function HomePage() {
   const router = useRouter();
   const { isDark, toggleTheme } = useTheme();
@@ -58,7 +68,7 @@ export default function HomePage() {
   const [openingRoomId, setOpeningRoomId] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // State form edit Akun
+  // Form edit akun
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editUsername, setEditUsername] = useState('');
   const [editBio, setEditBio] = useState('');
@@ -113,16 +123,29 @@ export default function HomePage() {
 
     const { data: recentMsgs } = await supabase
       .from('messages')
-      .select('id, room_id, content, created_at, sender_id')
+      .select('id, room_id, content, created_at, sender_id, read_at, media_type')
       .in('room_id', roomIds)
       .order('created_at', { ascending: false })
-      .limit(100);
+      .limit(300);
 
     const lastMsgMap = {};
     (recentMsgs || []).forEach((msg) => {
       if (!lastMsgMap[msg.room_id]) {
         lastMsgMap[msg.room_id] = msg;
       }
+    });
+
+    // Hitung jumlah pesan belum dibaca per room
+    const { data: unreadRows } = await supabase
+      .from('messages')
+      .select('room_id')
+      .in('room_id', roomIds)
+      .neq('sender_id', userId)
+      .is('read_at', null);
+
+    const unreadMap = {};
+    (unreadRows || []).forEach((row) => {
+      unreadMap[row.room_id] = (unreadMap[row.room_id] || 0) + 1;
     });
 
     const roomList = roomIds.map((rId) => {
@@ -132,6 +155,7 @@ export default function HomePage() {
         roomId: rId,
         otherUser: otherUser || { username: 'pengguna', display_name: 'Pengguna', avatar_url: '' },
         lastMessage: lastMsgMap[rId] || null,
+        unreadCount: unreadMap[rId] || 0,
       };
     });
 
@@ -202,10 +226,22 @@ export default function HomePage() {
       setLoading(false);
 
       channel = supabase
-        .channel('home-messages-sync')
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => {
+        .channel(`home-sync-${authUser.id}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
           loadRooms(authUser.id);
         })
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'room_members',
+            filter: `user_id=eq.${authUser.id}`,
+          },
+          () => {
+            loadRooms(authUser.id);
+          }
+        )
         .subscribe();
     };
 
@@ -282,7 +318,11 @@ export default function HomePage() {
 
     try {
       const cleanName = editDisplayName.trim();
-      const cleanUser = editUsername.trim().replace(/^@+/, '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+      const cleanUser = editUsername
+        .trim()
+        .replace(/^@+/, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, '');
 
       if (!cleanName) throw new Error('Nama tampilan tidak boleh kosong.');
       if (cleanUser.length < 3) throw new Error('Username minimal 3 karakter (huruf/angka/_).');
@@ -325,6 +365,19 @@ export default function HomePage() {
     }
   };
 
+  const handleTriggerPwaInstall = async () => {
+    const promptEvt = typeof window !== 'undefined' ? window.__rzchatInstallPrompt : null;
+    if (promptEvt) {
+      promptEvt.prompt();
+      await promptEvt.userChoice;
+      window.__rzchatInstallPrompt = null;
+    } else {
+      alert(
+        'Untuk install aplikasi: buka menu titik tiga (⋮) di browser Chrome lalu pilih "Tambahkan ke layar utama" atau "Install aplikasi".'
+      );
+    }
+  };
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.replace('/login');
@@ -341,6 +394,8 @@ export default function HomePage() {
       </div>
     );
   }
+
+  const totalUnread = rooms.reduce((sum, r) => sum + (r.unreadCount || 0), 0);
 
   const inputClass = isDark
     ? 'w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-700 text-white placeholder-zinc-400 text-sm focus:outline-none focus:border-blue-500'
@@ -506,51 +561,84 @@ export default function HomePage() {
               </div>
             ) : (
               <div className={`divide-y ${isDark ? 'divide-zinc-800/80' : 'divide-zinc-100'}`}>
-                {rooms.map((item) => (
-                  <button
-                    key={item.roomId}
-                    onClick={() => router.push(`/chat/${item.roomId}`)}
-                    className={`w-full px-4 py-3.5 flex items-center gap-3 text-left transition ${
-                      isDark ? 'hover:bg-zinc-900' : 'hover:bg-zinc-50'
-                    }`}
-                  >
-                    <Avatar
-                      src={item.otherUser.avatar_url}
-                      name={item.otherUser.display_name || item.otherUser.username}
-                      size="md"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="font-semibold text-sm truncate">
-                          {item.otherUser.display_name || item.otherUser.username}
-                        </p>
-                        {item.lastMessage && (
-                          <span
-                            className={`text-[11px] shrink-0 ${
-                              isDark ? 'text-zinc-500' : 'text-zinc-400'
+                {rooms.map((item) => {
+                  const isLastMine = item.lastMessage?.sender_id === user?.id;
+                  const hasUnread = item.unreadCount > 0;
+                  return (
+                    <button
+                      key={item.roomId}
+                      onClick={() => router.push(`/chat/${item.roomId}`)}
+                      className={`w-full px-4 py-3.5 flex items-center gap-3 text-left transition ${
+                        isDark ? 'hover:bg-zinc-900' : 'hover:bg-zinc-50'
+                      }`}
+                    >
+                      <Avatar
+                        src={item.otherUser.avatar_url}
+                        name={item.otherUser.display_name || item.otherUser.username}
+                        size="md"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p
+                            className={`text-sm truncate ${
+                              hasUnread ? 'font-bold' : 'font-semibold'
                             }`}
                           >
-                            {new Date(item.lastMessage.created_at).toLocaleTimeString('id-ID', {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </span>
-                        )}
+                            {item.otherUser.display_name || item.otherUser.username}
+                          </p>
+                          {item.lastMessage && (
+                            <span
+                              className={`text-[11px] shrink-0 ${
+                                hasUnread
+                                  ? 'text-blue-600 font-semibold'
+                                  : isDark
+                                    ? 'text-zinc-500'
+                                    : 'text-zinc-400'
+                              }`}
+                            >
+                              {new Date(item.lastMessage.created_at).toLocaleTimeString('id-ID', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 mt-0.5">
+                          <div
+                            className={`flex items-center gap-1 min-w-0 text-xs ${
+                              hasUnread
+                                ? isDark
+                                  ? 'text-zinc-100 font-medium'
+                                  : 'text-zinc-900 font-medium'
+                                : isDark
+                                  ? 'text-zinc-400'
+                                  : 'text-zinc-500'
+                            }`}
+                          >
+                            {isLastMine &&
+                              (item.lastMessage.read_at ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                              ) : (
+                                <CheckCheck className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                              ))}
+                            <span className="truncate">
+                              {item.lastMessage
+                                ? formatPreviewText(item.lastMessage)
+                                : `@${item.otherUser.username}`}
+                            </span>
+                          </div>
+
+                          {hasUnread && (
+                            <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-blue-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">
+                              {item.unreadCount > 99 ? '99+' : item.unreadCount}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <p
-                        className={`text-xs truncate mt-0.5 ${
-                          isDark ? 'text-zinc-400' : 'text-zinc-500'
-                        }`}
-                      >
-                        {item.lastMessage
-                          ? `${item.lastMessage.sender_id === user?.id ? 'Anda: ' : ''}${
-                              item.lastMessage.content
-                            }`
-                          : `@${item.otherUser.username}`}
-                      </p>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </main>
@@ -724,6 +812,32 @@ export default function HomePage() {
                 Simpan Perubahan
               </button>
             </form>
+
+            {/* Tombol Install PWA */}
+            <div
+              className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
+                isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
+              }`}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-blue-600/15 text-blue-600 flex items-center justify-center shrink-0">
+                  <Smartphone className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold">Install Aplikasi (PWA)</p>
+                  <p className={`text-[11px] truncate ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                    Tambahkan rzchat ke layar utama HP
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleTriggerPwaInstall}
+                className="px-3 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-semibold shrink-0"
+              >
+                Install
+              </button>
+            </div>
           </div>
         </main>
       )}
@@ -744,7 +858,14 @@ export default function HomePage() {
                 : 'text-zinc-500 hover:text-zinc-800'
           }`}
         >
-          <MessageSquare className="w-5 h-5" />
+          <div className="relative">
+            <MessageSquare className="w-5 h-5" />
+            {totalUnread > 0 && (
+              <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                {totalUnread > 99 ? '99+' : totalUnread}
+              </span>
+            )}
+          </div>
           <span className="text-[11px] font-semibold">Chat</span>
         </button>
 
