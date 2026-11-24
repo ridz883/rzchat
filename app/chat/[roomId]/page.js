@@ -1,11 +1,12 @@
 'use client';
+import { Suspense } from 'react';
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { ArrowLeft, Send, Plus, Loader2, Check, Clock } from 'lucide-react';
 
-export default function ChatRoomPage() {
+function ChatRoomContent() {
   const router = useRouter();
   const { roomId } = useParams();
 
@@ -284,5 +285,13 @@ export default function ChatRoomPage() {
         </button>
       </form>
     </div>
+  );
+}
+
+export default function ChatRoomPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#09090B] flex items-center justify-center text-zinc-400 text-sm">Memuat obrolan...</div>}>
+      <ChatRoomContent />
+    </Suspense>
   );
 }
