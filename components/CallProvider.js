@@ -237,7 +237,14 @@ export default function CallProvider({ children }) {
         } else if (event.track) {
           remoteMedia.addTrack(event.track);
         }
-        setRemoteStream(new MediaStream(remoteMedia.getTracks()));
+        const nextStream = new MediaStream(remoteMedia.getTracks());
+        setRemoteStream(nextStream);
+        if (remoteAudioRef.current) {
+          remoteAudioRef.current.srcObject = nextStream;
+          remoteAudioRef.current.muted = false;
+          remoteAudioRef.current.volume = 1.0;
+          remoteAudioRef.current.play().catch(() => {});
+        }
       };
 
       pc.onicecandidate = (event) => {
@@ -259,8 +266,16 @@ export default function CallProvider({ children }) {
             clearTimeout(timeoutRef.current);
             timeoutRef.current = null;
           }
+          const hasDtls =
+            Boolean(pc.localDescription?.sdp?.includes('a=fingerprint:')) &&
+            Boolean(pc.remoteDescription?.sdp?.includes('a=fingerprint:'));
           setCallState('connected');
-          setCallStatusText('Terhubung');
+          setCallStatusText(hasDtls ? 'Terhubung · DTLS-SRTP' : 'Terhubung');
+          if (remoteAudioRef.current) {
+            remoteAudioRef.current.muted = false;
+            remoteAudioRef.current.volume = 1.0;
+            remoteAudioRef.current.play().catch(() => {});
+          }
           if (!callTimerRef.current) {
             callTimerRef.current = setInterval(() => {
               setCallDuration((d) => d + 1);
@@ -295,8 +310,23 @@ export default function CallProvider({ children }) {
       }
 
       try {
+        const { data: allowed } = await supabase.rpc('can_signal_call', {
+          p_room_id: String(roomId),
+          p_target_id: targetUser.id,
+        });
+        if (!allowed) {
+          alert('Panggilan ditolak: pastikan kamu anggota ruang chat ini dan tidak sedang diblokir.');
+          return;
+        }
+
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          audio: {
+            echoCancellation: { ideal: true },
+            noiseSuppression: { ideal: true },
+            autoGainControl: { ideal: true },
+            channelCount: { ideal: 1 },
+            sampleRate: { ideal: 48000 },
+          },
           video:
             callType === 'video'
               ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
@@ -312,7 +342,17 @@ export default function CallProvider({ children }) {
         playTone('calling');
 
         const pc = await createPeerConnection(targetUser.id, callId);
-        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+        stream.getTracks().forEach((track) => {
+          const sender = pc.addTrack(track, stream);
+          if (track.kind === 'audio' && sender?.getParameters) {
+            try {
+              const params = sender.getParameters();
+              if (!params.encodings) params.encodings = [{}];
+              params.encodings[0].maxBitrate = 64000;
+              sender.setParameters(params).catch(() => {});
+            } catch {}
+          }
+        });
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -375,7 +415,13 @@ export default function CallProvider({ children }) {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        audio: {
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: true },
+          channelCount: { ideal: 1 },
+          sampleRate: { ideal: 48000 },
+        },
         video:
           info.callType === 'video'
             ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
@@ -386,7 +432,17 @@ export default function CallProvider({ children }) {
       setLocalStream(stream);
 
       const pc = await createPeerConnection(info.peer.id, info.callId);
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      stream.getTracks().forEach((track) => {
+        const sender = pc.addTrack(track, stream);
+        if (track.kind === 'audio' && sender?.getParameters) {
+          try {
+            const params = sender.getParameters();
+            if (!params.encodings) params.encodings = [{}];
+            params.encodings[0].maxBitrate = 64000;
+            sender.setParameters(params).catch(() => {});
+          } catch {}
+        }
+      });
 
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
@@ -553,6 +609,12 @@ export default function CallProvider({ children }) {
         if (!payload) return;
 
         if (payload.type === 'offer') {
+          if (!payload.roomId || !payload.caller?.id) return;
+          const { data: allowed } = await supabase.rpc('can_signal_call', {
+            p_room_id: String(payload.roomId),
+            p_target_id: payload.caller.id,
+          });
+          if (!allowed) return;
           if (callStateRef.current !== 'idle') {
             sendSignal(payload.caller.id, {
               type: 'busy',
@@ -579,7 +641,8 @@ export default function CallProvider({ children }) {
           if (
             pcRef.current &&
             callInfoRef.current &&
-            payload.callId === callInfoRef.current.callId
+            payload.callId === callInfoRef.current.callId &&
+            payload.fromId === callInfoRef.current.peer?.id
           ) {
             stopTone();
             setCallState('connecting');
@@ -595,7 +658,11 @@ export default function CallProvider({ children }) {
             } catch {}
           }
         } else if (payload.type === 'ice') {
-          if (callInfoRef.current && payload.callId === callInfoRef.current.callId) {
+          if (
+            callInfoRef.current &&
+            payload.callId === callInfoRef.current.callId &&
+            payload.fromId === callInfoRef.current.peer?.id
+          ) {
             if (pcRef.current && pcRef.current.remoteDescription) {
               try {
                 await pcRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
@@ -605,7 +672,11 @@ export default function CallProvider({ children }) {
             }
           }
         } else if (payload.type === 'end' || payload.type === 'reject' || payload.type === 'busy') {
-          if (callInfoRef.current && payload.callId === callInfoRef.current.callId) {
+          if (
+            callInfoRef.current &&
+            payload.callId === callInfoRef.current.callId &&
+            (!payload.fromId || payload.fromId === callInfoRef.current.peer?.id)
+          ) {
             stopTone();
             setCallStatusText(
               payload.type === 'busy'
@@ -644,6 +715,7 @@ export default function CallProvider({ children }) {
               ref={remoteVideoRef}
               autoPlay
               playsInline
+              muted
               className={`absolute inset-0 w-full h-full object-cover ${
                 callState === 'connected' ? 'opacity-100' : 'opacity-25'
               }`}

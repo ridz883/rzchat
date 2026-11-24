@@ -25,12 +25,27 @@ import {
   Ban,
   Eye,
   EyeOff,
+  Pin,
+  PinOff,
+  Search,
+  Forward,
+  FileText,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useTheme } from '../../../lib/useTheme';
 import { useCall } from '../../../components/CallProvider';
 import { sendPushNotification } from '../../../lib/pushClient';
 import Avatar from '../../../components/Avatar';
+import LinkPreviewCard from '../../../components/LinkPreviewCard';
+import {
+  ANDROID_MEDIA_ACCEPT,
+  sanitizeText,
+  validateUploadFile,
+  formatFileSize,
+} from '../../../lib/security';
+import { saveMediaToDevice } from '../../../lib/mediaHelper';
 
 const QUICK_EMOJIS = ['❤️', '😂', '👍', '🔥', '😮', '😢'];
 
@@ -71,6 +86,7 @@ const snippetOf = (msg) => {
   if (msg.media_type === 'audio') return '🎤 Voice Note';
   if (msg.media_type === 'image') return msg.content ? `📷 ${msg.content}` : '📷 Foto';
   if (msg.media_type === 'video') return msg.content ? `🎬 ${msg.content}` : '🎬 Video';
+  if (msg.media_type === 'file') return msg.file_name ? `📄 ${msg.file_name}` : '📄 Dokumen';
   return msg.content || '';
 };
 
@@ -98,10 +114,19 @@ function ChatRoomContent() {
   const lastTypingSentRef = useRef(0);
   const otherTypingTimeoutRef = useRef(null);
 
-  // Reply, Edit, Action Menu
+  // Reply, Edit, Action Menu, Search, Forward, Highlight, Save
   const [replyingTo, setReplyingTo] = useState(null);
   const [editingMsg, setEditingMsg] = useState(null);
   const [selectedMsg, setSelectedMsg] = useState(null);
+  const [showSearch, setShowSearch] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState('');
+  const [searchIdx, setSearchIdx] = useState(0);
+  const [highlightedMsgId, setHighlightedMsgId] = useState(null);
+  const [forwardingMsg, setForwardingMsg] = useState(null);
+  const [forwardRooms, setForwardRooms] = useState([]);
+  const [loadingForwardRooms, setLoadingForwardRooms] = useState(false);
+  const [forwardingToRoomId, setForwardingToRoomId] = useState(null);
+  const [savingMediaId, setSavingMediaId] = useState(null);
 
   // Media + View Once (1x Lihat)
   const [pendingMedia, setPendingMedia] = useState(null);
@@ -207,7 +232,7 @@ function ChatRoomContent() {
       const { data: initialMsgs } = await supabase
         .from('messages')
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size'
         )
         .eq('room_id', roomId)
         .order('created_at', { ascending: true });
@@ -300,30 +325,22 @@ function ChatRoomContent() {
     emitTyping(val.trim().length > 0);
   };
 
-  // Pilih foto atau video
+  // Pilih foto, video, audio, atau dokumen lewat Android System File Picker
   const handleMediaSelect = (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
 
-    if (file.size > 25 * 1024 * 1024) {
-      alert('Ukuran file maksimal 25 MB.');
+    const check = validateUploadFile(file, 25);
+    if (!check.valid) {
+      alert(check.error);
       return;
     }
 
-    const type = file.type.startsWith('video/')
-      ? 'video'
-      : file.type.startsWith('image/')
-        ? 'image'
-        : null;
-
-    if (!type) {
-      alert('Hanya mendukung file foto atau video.');
-      return;
-    }
-
+    const type = check.category;
     if (pendingMedia?.previewUrl) URL.revokeObjectURL(pendingMedia.previewUrl);
-    setPendingMedia({ file, type, previewUrl: URL.createObjectURL(file) });
+    const previewUrl = type === 'image' || type === 'video' ? URL.createObjectURL(file) : '';
+    setPendingMedia({ file, type, previewUrl });
     setIsViewOnce(false);
   };
 
@@ -337,7 +354,7 @@ function ChatRoomContent() {
   const handleSend = async (e) => {
     e?.preventDefault();
     if (iBlockedOther || otherBlockedMe) return;
-    const content = text.trim();
+    const content = sanitizeText(text, 4000);
 
     // Mode Edit Pesan
     if (editingMsg) {
@@ -373,7 +390,9 @@ function ChatRoomContent() {
     emitTyping(false);
     let uploadedUrl = '';
     let uploadedType = '';
-    const sendViewOnce = Boolean(pendingMedia && isViewOnce);
+    const sendViewOnce = Boolean(
+      pendingMedia && (pendingMedia.type === 'image' || pendingMedia.type === 'video') && isViewOnce
+    );
 
     try {
       if (pendingMedia) {
@@ -405,9 +424,11 @@ function ChatRoomContent() {
           media_type: uploadedType,
           reply_to_id: replyingTo?.id || null,
           is_view_once: sendViewOnce,
+          file_name: pendingMedia ? sanitizeText(pendingMedia.file.name, 160) : '',
+          file_size: pendingMedia ? pendingMedia.file.size : 0,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size'
         )
         .single();
 
@@ -435,7 +456,11 @@ function ChatRoomContent() {
               ? content
                 ? `🎬 ${content}`
                 : '🎬 Mengirim video'
-              : content;
+              : uploadedType === 'file'
+                ? `📄 ${pendingMedia?.file?.name || 'Mengirim dokumen'}`
+                : uploadedType === 'audio'
+                  ? '🎵 Mengirim audio'
+                  : content;
 
         sendPushNotification({
           roomId,
@@ -499,16 +524,29 @@ function ChatRoomContent() {
     );
   };
 
-  // Buka & Tutup Foto/Video 1x Lihat
+  // Buka & Tutup Foto/Video 1x Lihat (terkunci server-side)
   const handleOpenViewOnce = async (msg) => {
     if (!msg.media_url || msg.view_once_opened_at) return;
+    const { data: allowed, error } = await supabase.rpc('mark_view_once_opened', {
+      p_message_id: msg.id,
+    });
+    if (error || allowed === false) {
+      alert('Media 1x lihat ini sudah pernah dibuka dan terkunci.');
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msg.id
+            ? { ...m, media_url: '', view_once_opened_at: new Date().toISOString() }
+            : m
+        )
+      );
+      return;
+    }
     setViewOnceViewer({
       id: msg.id,
       url: msg.media_url,
       type: msg.media_type,
       caption: msg.content,
     });
-    await supabase.rpc('mark_view_once_opened', { p_message_id: msg.id });
     setMessages((prev) =>
       prev.map((m) =>
         m.id === msg.id ? { ...m, view_once_opened_at: new Date().toISOString() } : m
@@ -534,6 +572,201 @@ function ChatRoomContent() {
           : m
       )
     );
+  };
+
+  // Lompat & sorot pesan tertentu (untuk Pin & Pencarian)
+  const scrollToMessage = useCallback((msgId) => {
+    if (!msgId) return;
+    const el = document.getElementById(`msg-${msgId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedMsgId(msgId);
+      setTimeout(() => {
+        setHighlightedMsgId((cur) => (cur === msgId ? null : cur));
+      }, 2200);
+    }
+  }, []);
+
+  // Sematkan / Lepas Sematan Pesan
+  const handleTogglePinMessage = async (msg) => {
+    setSelectedMsg(null);
+    const { data: nowPinned, error } = await supabase.rpc('toggle_pin_message', {
+      p_message_id: String(msg.id),
+    });
+    if (error) {
+      alert('Gagal menyematkan pesan: ' + error.message);
+      return;
+    }
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === msg.id
+          ? {
+              ...m,
+              is_pinned: Boolean(nowPinned),
+              pinned_at: nowPinned ? new Date().toISOString() : null,
+              pinned_by: nowPinned ? currentUser?.id : null,
+            }
+          : m
+      )
+    );
+  };
+
+  // Simpan foto/video/dokumen ke perangkat HP
+  const handleSaveMedia = async (msg) => {
+    if (!msg?.media_url || msg.is_view_once) return;
+    setSavingMediaId(msg.id);
+    try {
+      await saveMediaToDevice({
+        url: msg.media_url,
+        fileName: msg.file_name || '',
+        mediaType: msg.media_type,
+        isViewOnce: msg.is_view_once,
+      });
+    } catch (err) {
+      alert(err.message || 'Gagal menyimpan media.');
+    } finally {
+      setSavingMediaId(null);
+    }
+  };
+
+  // Buka Modal Teruskan Pesan
+  const openForwardModal = async (msg) => {
+    if (!msg || msg.is_deleted || msg.is_view_once || !currentUser) return;
+    setSelectedMsg(null);
+    setForwardingMsg(msg);
+    setLoadingForwardRooms(true);
+    try {
+      const { data: myMem } = await supabase
+        .from('room_members')
+        .select('room_id')
+        .eq('user_id', currentUser.id);
+      const rIds = (myMem || []).map((m) => m.room_id);
+      if (rIds.length === 0) {
+        setForwardRooms([]);
+        return;
+      }
+      const { data: otherMem } = await supabase
+        .from('room_members')
+        .select('room_id, user_id')
+        .in('room_id', rIds)
+        .neq('user_id', currentUser.id);
+      const uIds = [...new Set((otherMem || []).map((m) => m.user_id))];
+      const { data: profs } =
+        uIds.length > 0
+          ? await supabase
+              .from('profiles')
+              .select('id, username, display_name, avatar_url')
+              .in('id', uIds)
+          : { data: [] };
+      const pMap = {};
+      (profs || []).forEach((p) => {
+        pMap[p.id] = p;
+      });
+      const list = (otherMem || []).map((m) => ({
+        roomId: m.room_id,
+        user: pMap[m.user_id] || { id: m.user_id, username: 'pengguna', display_name: 'Pengguna', avatar_url: '' },
+      }));
+      setForwardRooms(list);
+    } finally {
+      setLoadingForwardRooms(false);
+    }
+  };
+
+  // Kirim Pesan Terusan ke Ruang Tujuan
+  const handleForwardToRoom = async (target) => {
+    if (!forwardingMsg || !currentUser || forwardingToRoomId) return;
+    setForwardingToRoomId(target.roomId);
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .insert({
+          room_id: target.roomId,
+          sender_id: currentUser.id,
+          content: forwardingMsg.content || '',
+          media_url: forwardingMsg.media_url || '',
+          media_type: forwardingMsg.media_type || '',
+          file_name: forwardingMsg.file_name || '',
+          file_size: forwardingMsg.file_size || 0,
+          is_view_once: false,
+          is_forwarded: true,
+        })
+        .select(
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size'
+        )
+        .single();
+      if (error) throw error;
+
+      if (String(target.roomId) === String(roomId) && data) {
+        setMessages((prev) => (prev.some((m) => m.id === data.id) ? prev : [...prev, data]));
+        scrollToBottom();
+      }
+
+      const senderTitle = myProfile?.display_name || myProfile?.username || 'Pesan Diteruskan';
+      sendPushNotification({
+        roomId: target.roomId,
+        title: senderTitle,
+        body: `↪ ${snippetOf(forwardingMsg)}`,
+        url: `/chat/${target.roomId}`,
+        tag: `room-${target.roomId}`,
+      });
+      setForwardingMsg(null);
+    } catch (err) {
+      alert('Gagal meneruskan pesan: ' + (err.message || 'Terjadi kesalahan'));
+    } finally {
+      setForwardingToRoomId(null);
+    }
+  };
+
+  const pinnedMessages = messages
+    .filter((m) => m.is_pinned && !m.is_deleted)
+    .sort((a, b) => new Date(b.pinned_at || b.created_at) - new Date(a.pinned_at || a.created_at));
+  const latestPinned = pinnedMessages[0] || null;
+
+  const trimmedSearch = chatSearchQuery.trim().toLowerCase();
+  const searchMatches = trimmedSearch
+    ? messages.filter(
+        (m) =>
+          !m.is_deleted &&
+          ((m.content || '').toLowerCase().includes(trimmedSearch) ||
+            (m.file_name || '').toLowerCase().includes(trimmedSearch))
+      )
+    : [];
+
+  useEffect(() => {
+    setSearchIdx(0);
+    if (trimmedSearch && searchMatches.length > 0) {
+      scrollToMessage(searchMatches[searchMatches.length - 1].id);
+      setSearchIdx(searchMatches.length - 1);
+    }
+  }, [trimmedSearch]);
+
+  const jumpSearch = (dir) => {
+    if (searchMatches.length === 0) return;
+    const next = (searchIdx + dir + searchMatches.length) % searchMatches.length;
+    setSearchIdx(next);
+    scrollToMessage(searchMatches[next].id);
+  };
+
+  const renderHighlightedText = (textVal) => {
+    if (!trimmedSearch || !textVal) return textVal;
+    const lower = textVal.toLowerCase();
+    const qLen = trimmedSearch.length;
+    const parts = [];
+    let lastIdx = 0;
+    let idx = lower.indexOf(trimmedSearch, lastIdx);
+    let k = 0;
+    while (idx !== -1) {
+      if (idx > lastIdx) parts.push(textVal.slice(lastIdx, idx));
+      parts.push(
+        <mark key={k++} className="bg-amber-300 text-zinc-900 rounded px-0.5">
+          {textVal.slice(idx, idx + qLen)}
+        </mark>
+      );
+      lastIdx = idx + qLen;
+      idx = lower.indexOf(trimmedSearch, lastIdx);
+    }
+    if (lastIdx < textVal.length) parts.push(textVal.slice(lastIdx));
+    return parts;
   };
 
   // Blokir & Buka Blokir
@@ -623,7 +856,7 @@ function ChatRoomContent() {
               reply_to_id: replyingTo?.id || null,
             })
             .select(
-              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at'
+              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size'
             )
             .single();
           if (msgErr) throw msgErr;
@@ -789,6 +1022,23 @@ function ChatRoomContent() {
             </>
           )}
           <button
+            onClick={() => {
+              setShowSearch((s) => !s);
+              setChatSearchQuery('');
+              setSearchIdx(0);
+            }}
+            title="Cari Pesan di Chat"
+            className={`p-2 rounded-xl transition ${
+              showSearch
+                ? 'bg-blue-600 text-white'
+                : isDark
+                  ? 'hover:bg-zinc-800 text-zinc-200'
+                  : 'hover:bg-zinc-100 text-zinc-700'
+            }`}
+          >
+            <Search className="w-4 h-4" />
+          </button>
+          <button
             onClick={toggleTheme}
             title="Ganti Tema"
             className={`p-2 rounded-xl border transition ${
@@ -801,6 +1051,91 @@ function ChatRoomContent() {
           </button>
         </div>
       </header>
+
+      {/* Bar Pencarian Pesan di Dalam Chat */}
+      {showSearch && (
+        <div
+          className={`px-3 py-2 border-b flex items-center gap-2 shrink-0 ${
+            isDark ? 'bg-[#121215] border-zinc-800' : 'bg-zinc-50 border-zinc-200'
+          }`}
+        >
+          <Search className="w-4 h-4 text-zinc-400 shrink-0" />
+          <input
+            type="text"
+            autoFocus
+            value={chatSearchQuery}
+            onChange={(e) => setChatSearchQuery(e.target.value)}
+            placeholder="Cari kata kunci atau nama file..."
+            className={`flex-1 bg-transparent text-xs focus:outline-none ${
+              isDark ? 'text-white placeholder-zinc-500' : 'text-zinc-900 placeholder-zinc-400'
+            }`}
+          />
+          {trimmedSearch && (
+            <span className="text-[11px] text-zinc-400 tabular-nums shrink-0">
+              {searchMatches.length > 0 ? `${searchIdx + 1}/${searchMatches.length}` : '0/0'}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => jumpSearch(-1)}
+            disabled={searchMatches.length === 0}
+            className="p-1 rounded-lg disabled:opacity-30 hover:bg-zinc-500/15"
+          >
+            <ChevronUp className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => jumpSearch(1)}
+            disabled={searchMatches.length === 0}
+            className="p-1 rounded-lg disabled:opacity-30 hover:bg-zinc-500/15"
+          >
+            <ChevronDown className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowSearch(false);
+              setChatSearchQuery('');
+            }}
+            className="p-1 rounded-lg text-zinc-400 hover:text-red-500"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Banner Pesan Disematkan */}
+      {latestPinned && (
+        <div
+          className={`px-3 py-2 border-b flex items-center justify-between gap-2 shrink-0 ${
+            isDark ? 'bg-blue-950/30 border-zinc-800' : 'bg-blue-50/90 border-blue-100'
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => scrollToMessage(latestPinned.id)}
+            className="flex items-center gap-2 min-w-0 flex-1 text-left"
+          >
+            <Pin className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold text-blue-600 uppercase tracking-wide">
+                Pesan Disematkan {pinnedMessages.length > 1 ? `(${pinnedMessages.length})` : ''}
+              </p>
+              <p className={`text-xs truncate ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
+                {snippetOf(latestPinned)}
+              </p>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleTogglePinMessage(latestPinned)}
+            title="Lepas sematan"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-red-500 shrink-0"
+          >
+            <PinOff className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Area Pesan */}
       <main className="flex-1 overflow-y-auto px-3 py-4 space-y-2.5">
@@ -885,6 +1220,30 @@ function ChatRoomContent() {
                       </div>
                     )}
 
+                    <span id={`msg-${msg.id}`} className="scroll-mt-28 block h-0" />
+                    {highlightedMsgId === msg.id && (
+                      <div className="mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400/25 text-amber-300 text-[10px] font-semibold">
+                        Pesan ditemukan
+                      </div>
+                    )}
+                    {!msg.is_deleted && (msg.is_forwarded || msg.is_pinned) && (
+                      <div
+                        className={`flex items-center gap-2 mb-1 text-[10px] font-medium ${
+                          isMine ? 'text-blue-100/85' : 'text-zinc-400'
+                        }`}
+                      >
+                        {msg.is_forwarded && (
+                          <span className="inline-flex items-center gap-1 italic">
+                            <Forward className="w-3 h-3" /> Diteruskan
+                          </span>
+                        )}
+                        {msg.is_pinned && (
+                          <span className="inline-flex items-center gap-1">
+                            <Pin className="w-3 h-3" /> Disematkan
+                          </span>
+                        )}
+                      </div>
+                    )}
                     {/* Pesan Dihapus */}
                     {msg.is_deleted ? (
                       <p className="text-xs">🚫 Pesan ini telah dihapus</p>
@@ -930,46 +1289,138 @@ function ChatRoomContent() {
                       </div>
                     ) : (
                       <>
-                        {/* Foto Normal */}
+                        {/* Foto Normal + Tombol Simpan */}
                         {msg.media_type === 'image' && msg.media_url && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setLightboxImage(msg.media_url);
-                            }}
-                            className="block mb-1.5 overflow-hidden rounded-xl"
-                          >
-                            <img
-                              src={msg.media_url}
-                              alt="Foto"
-                              className="max-h-64 w-auto max-w-full rounded-xl object-cover"
-                            />
-                          </button>
+                          <div className="relative mb-1.5 group">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setLightboxImage(msg.media_url);
+                              }}
+                              className="block overflow-hidden rounded-xl"
+                            >
+                              <img
+                                src={msg.media_url}
+                                alt="Foto"
+                                className="max-h-64 w-auto max-w-full rounded-xl object-cover"
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSaveMedia(msg);
+                              }}
+                              title="Simpan Foto"
+                              className="absolute bottom-2 right-2 p-1.5 rounded-full bg-black/60 hover:bg-black/80 text-white backdrop-blur-xs transition"
+                            >
+                              {savingMediaId === msg.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Download className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
                         )}
 
-                        {/* Video Normal */}
+                        {/* Video Normal + Tombol Simpan */}
                         {msg.media_type === 'video' && msg.media_url && (
-                          <div onClick={(e) => e.stopPropagation()}>
+                          <div onClick={(e) => e.stopPropagation()} className="mb-1.5 space-y-1">
                             <video
                               src={msg.media_url}
                               controls
                               playsInline
                               preload="metadata"
-                              className="max-h-64 w-full rounded-xl bg-black mb-1.5"
+                              className="max-h-64 w-full rounded-xl bg-black"
                             />
+                            <button
+                              type="button"
+                              onClick={() => handleSaveMedia(msg)}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${
+                                isMine
+                                  ? 'bg-white/15 hover:bg-white/25 text-white'
+                                  : isDark
+                                    ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+                                    : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
+                              }`}
+                            >
+                              {savingMediaId === msg.id ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Download className="w-3 h-3" />
+                              )}
+                              Simpan Video
+                            </button>
                           </div>
                         )}
 
-                        {/* Voice Note */}
+                        {/* Voice Note / Audio */}
                         {msg.media_type === 'audio' && msg.media_url && (
                           <div onClick={(e) => e.stopPropagation()} className="min-w-[210px] py-0.5">
                             <audio src={msg.media_url} controls preload="metadata" className="w-full h-9" />
                           </div>
                         )}
 
+                        {/* Dokumen & File Umum */}
+                        {msg.media_type === 'file' && msg.media_url && (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className={`mb-1.5 p-2.5 rounded-xl border flex items-center justify-between gap-2.5 min-w-[210px] ${
+                              isMine
+                                ? 'bg-black/15 border-white/20 text-white'
+                                : isDark
+                                  ? 'bg-zinc-900/80 border-zinc-700 text-zinc-100'
+                                  : 'bg-zinc-50 border-zinc-200 text-zinc-900'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div
+                                className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                                  isMine ? 'bg-white/15' : 'bg-blue-600/15 text-blue-600'
+                                }`}
+                              >
+                                <FileText className="w-5 h-5" />
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold truncate">
+                                  {renderHighlightedText(msg.file_name || 'Dokumen')}
+                                </p>
+                                {msg.file_size > 0 && (
+                                  <p className={`text-[10px] ${isMine ? 'text-blue-100/80' : 'text-zinc-400'}`}>
+                                    {formatFileSize(msg.file_size)}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveMedia(msg)}
+                              title="Unduh Dokumen"
+                              className={`p-2 rounded-lg shrink-0 transition ${
+                                isMine
+                                  ? 'bg-white/15 hover:bg-white/25 text-white'
+                                  : isDark
+                                    ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+                                    : 'bg-zinc-200 hover:bg-zinc-300 text-zinc-800'
+                              }`}
+                            >
+                              {savingMediaId === msg.id ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Download className="w-4 h-4" />
+                              )}
+                            </button>
+                          </div>
+                        )}
+
                         {msg.content && (
-                          <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                          <>
+                            <p className="whitespace-pre-wrap leading-relaxed">
+                              {renderHighlightedText(msg.content)}
+                            </p>
+                            <LinkPreviewCard text={msg.content} isMe={isMine} isDark={isDark} />
+                          </>
                         )}
                       </>
                     )}
@@ -1107,32 +1558,40 @@ function ChatRoomContent() {
                 alt="Preview"
                 className="w-11 h-11 rounded-lg object-cover shrink-0 border border-black/10"
               />
-            ) : (
+            ) : pendingMedia.type === 'video' ? (
               <video src={pendingMedia.previewUrl} className="w-11 h-11 rounded-lg object-cover shrink-0 bg-black" />
+            ) : (
+              <div className="w-11 h-11 rounded-lg bg-blue-600/15 text-blue-600 flex items-center justify-center shrink-0">
+                <FileText className="w-5 h-5" />
+              </div>
             )}
             <div className="min-w-0">
               <p className="text-xs font-semibold truncate">{pendingMedia.file.name}</p>
               <p className={`text-[11px] ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                {isViewOnce ? 'Mode 1x Lihat aktif' : 'Siap dikirim'}
+                {isViewOnce
+                  ? 'Mode 1x Lihat aktif'
+                  : `${formatFileSize(pendingMedia.file.size)} · Siap dikirim`}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => setIsViewOnce((v) => !v)}
-              title="Aktifkan Foto/Video 1x Lihat"
-              className={`px-2.5 py-1.5 rounded-xl text-xs font-bold border transition ${
-                isViewOnce
-                  ? 'bg-blue-600 border-blue-600 text-white'
-                  : isDark
-                    ? 'bg-zinc-800 border-zinc-700 text-zinc-300'
-                    : 'bg-white border-zinc-300 text-zinc-700'
-              }`}
-            >
-              1x
-            </button>
+            {(pendingMedia.type === 'image' || pendingMedia.type === 'video') && (
+              <button
+                type="button"
+                onClick={() => setIsViewOnce((v) => !v)}
+                title="Aktifkan Foto/Video 1x Lihat"
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold border transition ${
+                  isViewOnce
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : isDark
+                      ? 'bg-zinc-800 border-zinc-700 text-zinc-300'
+                      : 'bg-white border-zinc-300 text-zinc-700'
+                }`}
+              >
+                1x
+              </button>
+            )}
             <button
               type="button"
               onClick={clearPendingMedia}
@@ -1202,7 +1661,7 @@ function ChatRoomContent() {
           <input
             ref={mediaInputRef}
             type="file"
-            accept="image/*,video/*"
+            accept={ANDROID_MEDIA_ACCEPT}
             onChange={handleMediaSelect}
             className="hidden"
           />
@@ -1212,7 +1671,7 @@ function ChatRoomContent() {
               type="button"
               onClick={() => mediaInputRef.current?.click()}
               disabled={sending || uploadingVoice}
-              title="Kirim Foto atau Video"
+              title="Kirim Foto, Video, Audio, atau Dokumen"
               className={`p-2.5 rounded-xl border transition shrink-0 ${
                 isDark
                   ? 'bg-zinc-900 border-zinc-700 text-zinc-300'
@@ -1306,6 +1765,51 @@ function ChatRoomContent() {
                 <Reply className="w-4 h-4 text-blue-600" /> Balas Pesan
               </button>
 
+              {!selectedMsg.is_deleted && (
+                <button
+                  onClick={() => handleTogglePinMessage(selectedMsg)}
+                  className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-3 text-sm font-medium ${
+                    isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'
+                  }`}
+                >
+                  {selectedMsg.is_pinned ? (
+                    <>
+                      <PinOff className="w-4 h-4 text-amber-500" /> Lepas Sematan
+                    </>
+                  ) : (
+                    <>
+                      <Pin className="w-4 h-4 text-blue-600" /> Sematkan Pesan
+                    </>
+                  )}
+                </button>
+              )}
+
+              {!selectedMsg.is_deleted && !selectedMsg.is_view_once && (
+                <button
+                  onClick={() => openForwardModal(selectedMsg)}
+                  className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-3 text-sm font-medium ${
+                    isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'
+                  }`}
+                >
+                  <Forward className="w-4 h-4 text-emerald-500" /> Teruskan Pesan
+                </button>
+              )}
+
+              {selectedMsg.media_url && !selectedMsg.is_view_once && !selectedMsg.is_deleted && (
+                <button
+                  onClick={() => {
+                    const target = selectedMsg;
+                    setSelectedMsg(null);
+                    handleSaveMedia(target);
+                  }}
+                  className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-3 text-sm font-medium ${
+                    isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'
+                  }`}
+                >
+                  <Download className="w-4 h-4 text-blue-500" /> Simpan ke Perangkat
+                </button>
+              )}
+
               {selectedMsg.sender_id === currentUser?.id &&
                 !selectedMsg.media_url &&
                 !selectedMsg.is_view_once &&
@@ -1362,6 +1866,8 @@ function ChatRoomContent() {
             <video
               src={viewOnceViewer.url}
               controls
+              controlsList="nodownload"
+              disablePictureInPicture
               autoPlay
               playsInline
               className="max-w-full max-h-[80vh] rounded-xl"
@@ -1387,16 +1893,19 @@ function ChatRoomContent() {
           onClick={() => setLightboxImage(null)}
         >
           <div className="absolute top-4 right-4 flex items-center gap-2">
-            <a
-              href={lightboxImage}
-              download
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="p-2 rounded-full bg-white/15 text-white"
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                saveMediaToDevice({ url: lightboxImage, mediaType: 'image', isViewOnce: false }).catch(
+                  () => {}
+                );
+              }}
+              title="Simpan Foto ke HP"
+              className="p-2 rounded-full bg-white/15 hover:bg-white/25 text-white"
             >
               <Download className="w-5 h-5" />
-            </a>
+            </button>
             <button
               onClick={() => setLightboxImage(null)}
               className="p-2 rounded-full bg-white/15 text-white"
@@ -1410,6 +1919,79 @@ function ChatRoomContent() {
             onClick={(e) => e.stopPropagation()}
             className="max-w-full max-h-[85vh] rounded-xl object-contain"
           />
+        </div>
+      )}
+
+      {/* Modal Teruskan Pesan */}
+      {forwardingMsg && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={() => setForwardingMsg(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full sm:max-w-sm rounded-t-3xl sm:rounded-2xl p-5 shadow-xl max-h-[75vh] flex flex-col ${
+              isDark ? 'bg-[#121215] text-zinc-100 border border-zinc-800' : 'bg-white text-zinc-900'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-bold text-sm flex items-center gap-2">
+                <Forward className="w-4 h-4 text-emerald-500" /> Teruskan ke...
+              </h2>
+              <button
+                type="button"
+                onClick={() => setForwardingMsg(null)}
+                className={`p-1.5 rounded-lg ${isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'}`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div
+              className={`mb-3 p-2.5 rounded-xl text-xs truncate ${
+                isDark ? 'bg-zinc-900 text-zinc-300' : 'bg-zinc-100 text-zinc-700'
+              }`}
+            >
+              {snippetOf(forwardingMsg)}
+            </div>
+            <div className="flex-1 overflow-y-auto divide-y divide-zinc-800/30">
+              {loadingForwardRooms ? (
+                <div className="py-8 flex justify-center">
+                  <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+                </div>
+              ) : forwardRooms.length === 0 ? (
+                <p className="py-8 text-center text-xs text-zinc-500">Belum ada obrolan tujuan.</p>
+              ) : (
+                forwardRooms.map((target) => (
+                  <button
+                    key={target.roomId}
+                    type="button"
+                    disabled={forwardingToRoomId === target.roomId}
+                    onClick={() => handleForwardToRoom(target)}
+                    className={`w-full py-2.5 px-2 flex items-center justify-between gap-3 text-left rounded-xl transition ${
+                      isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Avatar
+                        src={target.user.avatar_url}
+                        name={target.user.display_name || target.user.username}
+                        size="sm"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold truncate">
+                          {target.user.display_name || target.user.username}
+                        </p>
+                        <p className="text-[11px] text-zinc-400 truncate">@{target.user.username}</p>
+                      </div>
+                    </div>
+                    <span className="text-xs font-semibold text-blue-600 shrink-0">
+                      {forwardingToRoomId === target.roomId ? 'Mengirim...' : 'Kirim'}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       )}
 

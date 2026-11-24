@@ -18,6 +18,12 @@ import {
   Bell,
   BellOff,
   Ban,
+  Pin,
+  PinOff,
+  Archive,
+  ArchiveRestore,
+  MoreVertical,
+  ArrowLeft,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/useTheme';
@@ -62,6 +68,7 @@ const formatPreviewText = (msg) => {
   if (msg.media_type === 'audio') return '🎤 Voice Note';
   if (msg.media_type === 'image') return msg.content ? `📷 ${msg.content}` : '📷 Foto';
   if (msg.media_type === 'video') return msg.content ? `🎬 ${msg.content}` : '🎬 Video';
+  if (msg.media_type === 'file') return msg.file_name ? `📄 ${msg.file_name}` : '📄 Dokumen';
   return msg.content || '';
 };
 
@@ -83,6 +90,8 @@ export default function HomePage() {
   const [searchError, setSearchError] = useState('');
   const [openingRoomId, setOpeningRoomId] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showArchived, setShowArchived] = useState(false);
+  const [roomMenuTarget, setRoomMenuTarget] = useState(null);
 
   // Push Notification state
   const [pushState, setPushState] = useState({ supported: false, enabled: false });
@@ -130,7 +139,7 @@ export default function HomePage() {
   const loadRooms = useCallback(async (userId) => {
     const { data: myMembers } = await supabase
       .from('room_members')
-      .select('room_id')
+      .select('room_id, is_pinned, is_archived, pinned_at')
       .eq('user_id', userId);
 
     if (!myMembers || myMembers.length === 0) {
@@ -163,7 +172,7 @@ export default function HomePage() {
 
     const { data: recentMsgs } = await supabase
       .from('messages')
-      .select('id, room_id, content, created_at, sender_id, read_at, media_type, is_deleted, is_view_once')
+      .select('id, room_id, content, created_at, sender_id, read_at, media_type, is_deleted, is_view_once, file_name')
       .in('room_id', roomIds)
       .order('created_at', { ascending: false })
       .limit(300);
@@ -187,18 +196,32 @@ export default function HomePage() {
       unreadMap[row.room_id] = (unreadMap[row.room_id] || 0) + 1;
     });
 
+    const myPrefMap = {};
+    (myMembers || []).forEach((m) => {
+      myPrefMap[m.room_id] = {
+        isPinned: Boolean(m.is_pinned),
+        isArchived: Boolean(m.is_archived),
+        pinnedAt: m.pinned_at || null,
+      };
+    });
+
     const roomList = roomIds.map((rId) => {
       const member = (otherMembers || []).find((m) => m.room_id === rId);
       const otherUser = member ? profileMap[member.user_id] : null;
+      const pref = myPrefMap[rId] || { isPinned: false, isArchived: false, pinnedAt: null };
       return {
         roomId: rId,
         otherUser: otherUser || { id: '', username: 'pengguna', display_name: 'Pengguna', avatar_url: '' },
         lastMessage: lastMsgMap[rId] || null,
         unreadCount: unreadMap[rId] || 0,
+        isPinned: pref.isPinned,
+        isArchived: pref.isArchived,
+        pinnedAt: pref.pinnedAt,
       };
     });
 
     roomList.sort((a, b) => {
+      if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
       const timeA = a.lastMessage ? new Date(a.lastMessage.created_at).getTime() : 0;
       const timeB = b.lastMessage ? new Date(b.lastMessage.created_at).getTime() : 0;
       return timeB - timeA;
@@ -206,6 +229,51 @@ export default function HomePage() {
 
     setRooms(roomList);
   }, []);
+
+  const handleTogglePinRoom = async (item) => {
+    const nextPinned = !item.isPinned;
+    setRoomMenuTarget(null);
+    setRooms((prev) => {
+      const updated = prev.map((r) =>
+        r.roomId === item.roomId
+          ? { ...r, isPinned: nextPinned, pinnedAt: nextPinned ? new Date().toISOString() : null }
+          : r
+      );
+      return updated.sort((a, b) => {
+        if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+        const tA = a.lastMessage ? new Date(a.lastMessage.created_at).getTime() : 0;
+        const tB = b.lastMessage ? new Date(b.lastMessage.created_at).getTime() : 0;
+        return tB - tA;
+      });
+    });
+    const { error } = await supabase.rpc('update_room_preference', {
+      p_room_id: String(item.roomId),
+      p_is_pinned: nextPinned,
+    });
+    if (error && user?.id) loadRooms(user.id);
+  };
+
+  const handleToggleArchiveRoom = async (item) => {
+    const nextArchived = !item.isArchived;
+    setRoomMenuTarget(null);
+    setRooms((prev) =>
+      prev.map((r) =>
+        r.roomId === item.roomId
+          ? { ...r, isArchived: nextArchived, isPinned: nextArchived ? false : r.isPinned }
+          : r
+      )
+    );
+    const { error } = await supabase.rpc('update_room_preference', {
+      p_room_id: String(item.roomId),
+      p_is_archived: nextArchived,
+      p_is_pinned: nextArchived ? false : undefined,
+    });
+    if (error && user?.id) loadRooms(user.id);
+  };
+
+  const archivedRooms = rooms.filter((r) => r.isArchived);
+  const activeRooms = rooms.filter((r) => !r.isArchived);
+  const visibleRooms = showArchived ? archivedRooms : activeRooms;
 
   useEffect(() => {
     let channel;
@@ -625,6 +693,101 @@ export default function HomePage() {
 
           {/* Daftar Obrolan */}
           <main className="flex-1 overflow-y-auto">
+            {showArchived ? (
+              <div
+                className={`px-4 py-2.5 border-b flex items-center justify-between ${
+                  isDark ? 'bg-zinc-900/80 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setShowArchived(false)}
+                  className="flex items-center gap-2 text-xs font-semibold text-blue-600"
+                >
+                  <ArrowLeft className="w-4 h-4" /> Kembali ke Obrolan Utama
+                </button>
+                <span className="text-[11px] text-zinc-500">Arsip ({archivedRooms.length})</span>
+              </div>
+            ) : (
+              archivedRooms.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowArchived(true)}
+                  className={`w-full px-4 py-3 border-b flex items-center justify-between text-left transition ${
+                    isDark
+                      ? 'bg-zinc-900/50 border-zinc-800 hover:bg-zinc-900'
+                      : 'bg-zinc-50 border-zinc-200 hover:bg-zinc-100'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-blue-600/15 text-blue-600 flex items-center justify-center">
+                      <Archive className="w-4 h-4" />
+                    </div>
+                    <span className="text-sm font-semibold">Diarsipkan</span>
+                  </div>
+                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-600/15 text-blue-600">
+                    {archivedRooms.length}
+                  </span>
+                </button>
+              )
+            )}
+
+            {roomMenuTarget && (
+              <div
+                className="fixed inset-0 z-50 bg-black/50 flex items-end justify-center p-3"
+                onClick={() => setRoomMenuTarget(null)}
+              >
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className={`w-full max-w-md rounded-2xl p-4 shadow-xl space-y-2 ${
+                    isDark
+                      ? 'bg-[#121215] border border-zinc-800 text-zinc-100'
+                      : 'bg-white text-zinc-900'
+                  }`}
+                >
+                  <p className="text-xs font-semibold px-2 pb-1 text-zinc-400 truncate">
+                    {roomMenuTarget.otherUser.display_name || roomMenuTarget.otherUser.username}
+                  </p>
+                  {!roomMenuTarget.isArchived && (
+                    <button
+                      type="button"
+                      onClick={() => handleTogglePinRoom(roomMenuTarget)}
+                      className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-3 text-sm font-medium ${
+                        isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'
+                      }`}
+                    >
+                      {roomMenuTarget.isPinned ? (
+                        <>
+                          <PinOff className="w-4 h-4 text-amber-500" /> Lepas Sematan Chat
+                        </>
+                      ) : (
+                        <>
+                          <Pin className="w-4 h-4 text-blue-600" /> Sematkan ke Atas
+                        </>
+                      )}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleToggleArchiveRoom(roomMenuTarget)}
+                    className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-3 text-sm font-medium ${
+                      isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'
+                    }`}
+                  >
+                    {roomMenuTarget.isArchived ? (
+                      <>
+                        <ArchiveRestore className="w-4 h-4 text-emerald-500" /> Keluarkan dari Arsip
+                      </>
+                    ) : (
+                      <>
+                        <Archive className="w-4 h-4 text-zinc-500" /> Arsipkan Obrolan
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {rooms.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center px-6">
                 <MessageSquare
@@ -638,7 +801,12 @@ export default function HomePage() {
               </div>
             ) : (
               <div className={`divide-y ${isDark ? 'divide-zinc-800/80' : 'divide-zinc-100'}`}>
-                {rooms.map((item) => {
+                {visibleRooms.length === 0 && (
+                  <div className="py-12 text-center text-xs text-zinc-500">
+                    {showArchived ? 'Tidak ada obrolan diarsipkan.' : 'Semua obrolan sedang diarsipkan.'}
+                  </div>
+                )}
+                {visibleRooms.map((item) => {
                   const isLastMine = item.lastMessage?.sender_id === user?.id;
                   const hasUnread = item.unreadCount > 0;
                   const isOnline = Boolean(item.otherUser?.id && onlineUsers.has(item.otherUser.id));
@@ -668,9 +836,28 @@ export default function HomePage() {
 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2">
-                          <p className={`text-sm truncate ${hasUnread ? 'font-bold' : 'font-semibold'}`}>
-                            {item.otherUser.display_name || item.otherUser.username}
-                          </p>
+                          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                            {item.isPinned && (
+                              <Pin className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                            )}
+                            <p className={`text-sm truncate ${hasUnread ? 'font-bold' : 'font-semibold'}`}>
+                              {item.otherUser.display_name || item.otherUser.username}
+                            </p>
+                          </div>
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRoomMenuTarget(item);
+                            }}
+                            title="Sematkan / Arsipkan Chat"
+                            className={`p-1 rounded-lg shrink-0 ${
+                              isDark ? 'hover:bg-zinc-800 text-zinc-400' : 'hover:bg-zinc-200 text-zinc-500'
+                            }`}
+                          >
+                            <MoreVertical className="w-3.5 h-3.5" />
+                          </span>
                           {item.lastMessage && (
                             <span
                               className={`text-[11px] shrink-0 ${

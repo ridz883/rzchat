@@ -14,9 +14,15 @@ import {
   ArrowLeft,
   Check,
   X,
+  ShieldCheck,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useTheme } from '../../lib/useTheme';
+import {
+  sanitizeText,
+  sanitizeUsername,
+  validatePasswordStrength,
+} from '../../lib/security';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -32,6 +38,8 @@ export default function LoginPage() {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [infoMsg, setInfoMsg] = useState('');
   const [error, setError] = useState('');
+
+  const pwStrength = validatePasswordStrength(password);
 
   const routeAfterAuth = async (userId) => {
     const { data: prof } = await supabase
@@ -57,7 +65,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (step !== 'register') return;
-    const clean = username.trim().replace(/^@+/, '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+    const clean = sanitizeUsername(username);
     if (clean.length < 3) {
       setUsernameStatus('idle');
       return;
@@ -70,7 +78,6 @@ export default function LoginPage() {
     return () => clearTimeout(timer);
   }, [username, step]);
 
-  // Login 1-klik pilih akun Gmail di HP
   const handleGoogleLogin = async () => {
     setError('');
     setGoogleLoading(true);
@@ -91,8 +98,9 @@ export default function LoginPage() {
 
   const handleCheckEmail = async (e) => {
     e.preventDefault();
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes('@')) {
+    const cleanEmail = sanitizeText(email, 160).toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
       setError('Masukkan alamat email yang valid.');
       return;
     }
@@ -111,7 +119,7 @@ export default function LoginPage() {
       if (exists) {
         setStep('login');
       } else {
-        setDisplayName(cleanEmail.split('@')[0]);
+        setDisplayName(sanitizeText(cleanEmail.split('@')[0], 40));
         setStep('register');
       }
     } catch (err) {
@@ -128,7 +136,7 @@ export default function LoginPage() {
 
     try {
       const { data, error: signInErr } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
+        email: sanitizeText(email, 160).toLowerCase(),
         password,
       });
       if (signInErr) throw signInErr;
@@ -150,15 +158,19 @@ export default function LoginPage() {
     setError('');
 
     try {
-      const cleanName = displayName.trim();
-      const cleanUser = username
-        .trim()
-        .replace(/^@+/, '')
-        .toLowerCase()
-        .replace(/[^a-z0-9_]/g, '');
+      const cleanName = sanitizeText(displayName, 40);
+      const cleanUser = sanitizeUsername(username);
+      const cleanEmail = sanitizeText(email, 160).toLowerCase();
 
-      if (!cleanName) throw new Error('Nama tampilan wajib diisi.');
-      if (cleanUser.length < 3) throw new Error('Username minimal 3 karakter (huruf/angka/_).');
+      if (!cleanName || cleanName.length < 2) {
+        throw new Error('Nama tampilan minimal 2 karakter.');
+      }
+      if (cleanUser.length < 3) {
+        throw new Error('Username minimal 3 karakter (huruf/angka/_).');
+      }
+      if (!pwStrength.valid) {
+        throw new Error(`Password belum aman: ${pwStrength.label}.`);
+      }
 
       const { data: available } = await supabase.rpc('check_username_available', {
         p_username: cleanUser,
@@ -166,7 +178,7 @@ export default function LoginPage() {
       if (!available) throw new Error('Username sudah dipakai orang lain.');
 
       const { data, error: signUpErr } = await supabase.auth.signUp({
-        email: email.trim().toLowerCase(),
+        email: cleanEmail,
         password,
         options: {
           data: {
@@ -190,7 +202,7 @@ export default function LoginPage() {
         router.replace('/');
       } else {
         const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({
-          email: email.trim().toLowerCase(),
+          email: cleanEmail,
           password,
         });
         if (loginErr) {
@@ -261,7 +273,6 @@ export default function LoginPage() {
 
         {step === 'email' && (
           <div className="space-y-4">
-            {/* Tombol Utama: Klik Akun Google Langsung Masuk */}
             <button
               type="button"
               onClick={handleGoogleLogin}
@@ -378,7 +389,7 @@ export default function LoginPage() {
             </button>
 
             <div className={`p-3 rounded-xl text-xs ${isDark ? 'bg-blue-500/10 text-blue-300' : 'bg-blue-50 text-blue-700'}`}>
-              Email belum terdaftar. Buat <b>username</b> dan password dulu untuk mulai chat.
+              Email belum terdaftar. Buat <b>username</b> dan password kuat (terenkripsi Bcrypt) untuk mulai chat.
             </div>
 
             <div>
@@ -392,7 +403,7 @@ export default function LoginPage() {
                   required
                   autoFocus
                   value={username}
-                  onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+                  onChange={(e) => setUsername(sanitizeUsername(e.target.value))}
                   placeholder="minimal 3 huruf/angka"
                   className={inputClass}
                 />
@@ -412,6 +423,7 @@ export default function LoginPage() {
                 <input
                   type="text"
                   required
+                  maxLength={40}
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="Nama panggilan kamu"
@@ -429,18 +441,45 @@ export default function LoginPage() {
                 <input
                   type="password"
                   required
-                  minLength={6}
+                  minLength={8}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Minimal 6 karakter"
+                  placeholder="Min. 8 karakter (huruf & angka)"
                   className={inputClass}
                 />
               </div>
+              {password.length > 0 && (
+                <div className="mt-1.5 space-y-1">
+                  <div className="flex gap-1">
+                    {[1, 2, 3, 4].map((lvl) => (
+                      <div
+                        key={lvl}
+                        className={`h-1 flex-1 rounded-full ${
+                          pwStrength.score >= lvl
+                            ? pwStrength.score >= 3
+                              ? 'bg-emerald-500'
+                              : 'bg-amber-500'
+                            : isDark
+                            ? 'bg-zinc-800'
+                            : 'bg-zinc-200'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  <p
+                    className={`text-[11px] flex items-center gap-1 ${
+                      pwStrength.valid ? 'text-emerald-500' : 'text-amber-500'
+                    }`}
+                  >
+                    <ShieldCheck className="w-3 h-3" /> {pwStrength.label}
+                  </p>
+                </div>
+              )}
             </div>
 
             <button
               type="submit"
-              disabled={loading || usernameStatus === 'taken'}
+              disabled={loading || usernameStatus === 'taken' || !pwStrength.valid}
               className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold text-sm flex items-center justify-center gap-2 transition"
             >
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}
