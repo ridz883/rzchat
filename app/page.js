@@ -1,14 +1,53 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search, LogOut, MessageSquare, Sun, Moon, Loader2 } from 'lucide-react';
+import {
+  Search,
+  LogOut,
+  MessageSquare,
+  User,
+  Sun,
+  Moon,
+  Loader2,
+  Camera,
+  Check,
+  Trash2,
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/useTheme';
+import Avatar from '../components/Avatar';
+
+const compressImageToDataUrl = (file) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Gagal membaca gambar.'));
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('File bukan gambar yang valid.'));
+      img.onload = () => {
+        const size = 256;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const minSide = Math.min(img.width, img.height);
+        const sx = (img.width - minSide) / 2;
+        const sy = (img.height - minSide) / 2;
+        ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
+        resolve(canvas.toDataURL('image/jpeg', 0.78));
+      };
+      img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
 
 export default function HomePage() {
   const router = useRouter();
   const { isDark, toggleTheme } = useTheme();
+  const fileInputRef = useRef(null);
+
+  const [activeTab, setActiveTab] = useState('chat');
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [rooms, setRooms] = useState([]);
@@ -18,6 +57,25 @@ export default function HomePage() {
   const [searchError, setSearchError] = useState('');
   const [openingRoomId, setOpeningRoomId] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // State form edit Akun
+  const [editDisplayName, setEditDisplayName] = useState('');
+  const [editUsername, setEditUsername] = useState('');
+  const [editBio, setEditBio] = useState('');
+  const [editStatus, setEditStatus] = useState('');
+  const [editLocation, setEditLocation] = useState('');
+  const [editAvatar, setEditAvatar] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [saveMessage, setSaveMessage] = useState({ type: '', text: '' });
+
+  const syncFormWithProfile = (prof) => {
+    setEditDisplayName(prof?.display_name || '');
+    setEditUsername(prof?.username || '');
+    setEditBio(prof?.bio || '');
+    setEditStatus(prof?.status_text || '');
+    setEditLocation(prof?.location || '');
+    setEditAvatar(prof?.avatar_url || '');
+  };
 
   const loadRooms = useCallback(async (userId) => {
     const { data: myMembers } = await supabase
@@ -40,9 +98,13 @@ export default function HomePage() {
 
     const otherUserIds = [...new Set((otherMembers || []).map((m) => m.user_id))];
 
-    const { data: otherProfiles } = otherUserIds.length > 0
-      ? await supabase.from('profiles').select('id, username, display_name').in('id', otherUserIds)
-      : { data: [] };
+    const { data: otherProfiles } =
+      otherUserIds.length > 0
+        ? await supabase
+            .from('profiles')
+            .select('id, username, display_name, avatar_url, status_text')
+            .in('id', otherUserIds)
+        : { data: [] };
 
     const profileMap = {};
     (otherProfiles || []).forEach((p) => {
@@ -68,7 +130,7 @@ export default function HomePage() {
       const otherUser = member ? profileMap[member.user_id] : null;
       return {
         roomId: rId,
-        otherUser: otherUser || { username: 'pengguna', display_name: 'Pengguna' },
+        otherUser: otherUser || { username: 'pengguna', display_name: 'Pengguna', avatar_url: '' },
         lastMessage: lastMsgMap[rId] || null,
       };
     });
@@ -86,7 +148,9 @@ export default function HomePage() {
     let channel;
 
     const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       if (!session) {
         router.replace('/login');
         return;
@@ -97,12 +161,16 @@ export default function HomePage() {
 
       let { data: prof } = await supabase
         .from('profiles')
-        .select('id, username, display_name')
+        .select('id, username, display_name, bio, status_text, location, avatar_url')
         .eq('id', authUser.id)
         .maybeSingle();
 
       if (!prof || !prof.username) {
-        const fallbackUsername = (authUser.user_metadata?.username || authUser.email?.split('@')[0] || 'user')
+        const fallbackUsername = (
+          authUser.user_metadata?.username ||
+          authUser.email?.split('@')[0] ||
+          'user'
+        )
           .toLowerCase()
           .replace(/[^a-z0-9_]/g, '');
         const fallbackName = authUser.user_metadata?.display_name || fallbackUsername;
@@ -114,13 +182,22 @@ export default function HomePage() {
             username: fallbackUsername,
             display_name: fallbackName,
           })
-          .select('id, username, display_name')
+          .select('id, username, display_name, bio, status_text, location, avatar_url')
           .single();
 
-        prof = upserted || { id: authUser.id, username: fallbackUsername, display_name: fallbackName };
+        prof = upserted || {
+          id: authUser.id,
+          username: fallbackUsername,
+          display_name: fallbackName,
+          bio: '',
+          status_text: '',
+          location: '',
+          avatar_url: '',
+        };
       }
 
       setProfile(prof);
+      syncFormWithProfile(prof);
       await loadRooms(authUser.id);
       setLoading(false);
 
@@ -153,7 +230,7 @@ export default function HomePage() {
       setSearchError('');
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, username, display_name')
+        .select('id, username, display_name, avatar_url, bio')
         .ilike('username', `%${q}%`)
         .neq('id', user.id)
         .limit(10);
@@ -185,6 +262,69 @@ export default function HomePage() {
     }
   };
 
+  const handlePhotoSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSaveMessage({ type: '', text: '' });
+    try {
+      const compressed = await compressImageToDataUrl(file);
+      setEditAvatar(compressed);
+    } catch (err) {
+      setSaveMessage({ type: 'error', text: err.message || 'Gagal memproses foto.' });
+    }
+  };
+
+  const handleSaveProfile = async (e) => {
+    e.preventDefault();
+    if (!user) return;
+    setSavingProfile(true);
+    setSaveMessage({ type: '', text: '' });
+
+    try {
+      const cleanName = editDisplayName.trim();
+      const cleanUser = editUsername.trim().replace(/^@+/, '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+
+      if (!cleanName) throw new Error('Nama tampilan tidak boleh kosong.');
+      if (cleanUser.length < 3) throw new Error('Username minimal 3 karakter (huruf/angka/_).');
+
+      if (cleanUser !== profile?.username) {
+        const { data: taken } = await supabase
+          .from('profiles')
+          .select('id')
+          .ilike('username', cleanUser)
+          .neq('id', user.id)
+          .maybeSingle();
+        if (taken) throw new Error('Username tersebut sudah dipakai orang lain.');
+      }
+
+      const payload = {
+        display_name: cleanName,
+        username: cleanUser,
+        bio: editBio.trim(),
+        status_text: editStatus.trim(),
+        location: editLocation.trim(),
+        avatar_url: editAvatar || '',
+      };
+
+      const { data: updated, error } = await supabase
+        .from('profiles')
+        .update(payload)
+        .eq('id', user.id)
+        .select('id, username, display_name, bio, status_text, location, avatar_url')
+        .single();
+
+      if (error) throw error;
+
+      setProfile(updated);
+      syncFormWithProfile(updated);
+      setSaveMessage({ type: 'success', text: 'Profil berhasil disimpan!' });
+    } catch (err) {
+      setSaveMessage({ type: 'error', text: err.message || 'Gagal menyimpan profil.' });
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.replace('/login');
@@ -192,154 +332,439 @@ export default function HomePage() {
 
   if (loading) {
     return (
-      <div className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-[#09090B] text-zinc-400' : 'bg-white text-zinc-500'}`}>
+      <div
+        className={`w-full h-[100dvh] flex items-center justify-center ${
+          isDark ? 'bg-[#09090B] text-zinc-400' : 'bg-white text-zinc-500'
+        }`}
+      >
         <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
       </div>
     );
   }
 
-  const initial = (profile?.display_name || profile?.username || 'U').charAt(0).toUpperCase();
+  const inputClass = isDark
+    ? 'w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-700 text-white placeholder-zinc-400 text-sm focus:outline-none focus:border-blue-500'
+    : 'w-full px-3.5 py-2.5 rounded-xl bg-zinc-50 border border-zinc-300 text-zinc-900 placeholder-zinc-400 text-sm focus:outline-none focus:border-blue-600';
 
   return (
-    <div className={`min-h-screen flex flex-col max-w-lg mx-auto border-x transition-colors ${isDark ? 'bg-[#09090B] text-zinc-100 border-zinc-800' : 'bg-white text-zinc-900 border-zinc-200'}`}>
-      {/* Header Profil */}
-      <header className={`px-4 py-3 border-b flex items-center justify-between sticky top-0 z-10 ${isDark ? 'bg-[#09090B]/95 border-zinc-800' : 'bg-white/95 border-zinc-200'} backdrop-blur`}>
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center shrink-0">
-            {initial}
+    <div
+      className={`w-full h-[100dvh] flex flex-col transition-colors ${
+        isDark ? 'bg-[#09090B] text-zinc-100' : 'bg-white text-zinc-900'
+      }`}
+    >
+      {/* Top Header */}
+      <header
+        className={`px-4 py-3 border-b flex items-center justify-between shrink-0 ${
+          isDark ? 'bg-[#09090B] border-zinc-800' : 'bg-white border-zinc-200'
+        }`}
+      >
+        {activeTab === 'chat' ? (
+          <div className="flex items-center gap-3 min-w-0">
+            <Avatar
+              src={profile?.avatar_url}
+              name={profile?.display_name || profile?.username}
+              size="sm"
+            />
+            <div className="min-w-0">
+              <p className="font-bold text-sm leading-tight truncate">
+                {profile?.display_name || profile?.username}
+              </p>
+              <p className={`text-xs truncate ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                @{profile?.username}
+              </p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <p className="font-semibold text-sm truncate">
-              {profile?.display_name || profile?.username || 'Pengguna'}
-            </p>
-            <p className={`text-xs truncate ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-              @{profile?.username || 'belum_ada'}
-            </p>
-          </div>
-        </div>
+        ) : (
+          <h1 className="font-bold text-base">Akun & Profil Saya</h1>
+        )}
 
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             onClick={toggleTheme}
             title="Ganti Tema"
-            className={`p-2 rounded-xl border transition ${isDark ? 'bg-zinc-900 border-zinc-700 text-amber-400' : 'bg-zinc-100 border-zinc-200 text-zinc-700'}`}
+            className={`p-2 rounded-xl border transition ${
+              isDark
+                ? 'bg-zinc-900 border-zinc-700 text-amber-400'
+                : 'bg-zinc-100 border-zinc-200 text-zinc-700'
+            }`}
           >
             {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
           <button
             onClick={handleLogout}
             title="Keluar"
-            className={`p-2 rounded-xl border transition ${isDark ? 'bg-zinc-900 border-zinc-700 text-zinc-300 hover:text-red-400' : 'bg-zinc-100 border-zinc-200 text-zinc-700 hover:text-red-600'}`}
+            className={`p-2 rounded-xl border transition ${
+              isDark
+                ? 'bg-zinc-900 border-zinc-700 text-zinc-300 hover:text-red-400'
+                : 'bg-zinc-100 border-zinc-200 text-zinc-700 hover:text-red-600'
+            }`}
           >
             <LogOut className="w-4 h-4" />
           </button>
         </div>
       </header>
 
-      {/* Kolom Cari Username */}
-      <div className={`p-3 border-b ${isDark ? 'border-zinc-800' : 'border-zinc-200'}`}>
-        <div className="relative">
-          <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-3" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cari @username teman..."
-            className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-sm border focus:outline-none ${
-              isDark
-                ? 'bg-zinc-900 border-zinc-700 text-white placeholder-zinc-400 focus:border-blue-500'
-                : 'bg-zinc-100 border-zinc-200 text-zinc-900 placeholder-zinc-500 focus:border-blue-600 focus:bg-white'
-            }`}
-          />
-        </div>
-      </div>
-
-      {/* Hasil Pencarian */}
-      {searchQuery.trim() !== '' && (
-        <div className={`border-b ${isDark ? 'bg-[#121215] border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
-          <p className={`px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wider ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-            Pengguna Ditemukan
-          </p>
-
-          {searching ? (
-            <div className="px-4 py-4 flex items-center gap-2 text-xs text-zinc-500">
-              <Loader2 className="w-4 h-4 animate-spin" /> Mencari...
+      {/* Konten Utama */}
+      {activeTab === 'chat' ? (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Kolom Pencarian */}
+          <div className={`p-3 border-b shrink-0 ${isDark ? 'border-zinc-800' : 'border-zinc-200'}`}>
+            <div className="relative">
+              <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-3" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Cari @username teman..."
+                className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-sm border focus:outline-none ${
+                  isDark
+                    ? 'bg-zinc-900 border-zinc-700 text-white placeholder-zinc-400 focus:border-blue-500'
+                    : 'bg-zinc-100 border-zinc-200 text-zinc-900 placeholder-zinc-500 focus:border-blue-600 focus:bg-white'
+                }`}
+              />
             </div>
-          ) : searchError ? (
-            <p className="px-4 py-3 text-xs text-red-500">{searchError}</p>
-          ) : searchResults.length === 0 ? (
-            <p className={`px-4 py-3 text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-              Tidak ada user dengan username tersebut.
-            </p>
-          ) : (
-            <div>
-              {searchResults.map((target) => (
-                <button
-                  key={target.id}
-                  onClick={() => handleStartChat(target)}
-                  disabled={openingRoomId === target.id}
-                  className={`w-full px-4 py-3 flex items-center justify-between text-left transition ${isDark ? 'hover:bg-zinc-800/60' : 'hover:bg-zinc-200/60'}`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-9 h-9 rounded-full bg-blue-600/15 text-blue-600 font-bold flex items-center justify-center shrink-0">
-                      {(target.display_name || target.username || '?').charAt(0).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">{target.display_name || target.username}</p>
-                      <p className={`text-xs truncate ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>@{target.username}</p>
-                    </div>
-                  </div>
-                  <span className="text-xs font-medium text-blue-600 shrink-0 ml-2">
-                    {openingRoomId === target.id ? 'Membuka...' : 'Chat'}
-                  </span>
-                </button>
-              ))}
+          </div>
+
+          {/* Hasil Pencarian */}
+          {searchQuery.trim() !== '' && (
+            <div
+              className={`border-b shrink-0 ${
+                isDark ? 'bg-[#121215] border-zinc-800' : 'bg-zinc-50 border-zinc-200'
+              }`}
+            >
+              <p
+                className={`px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wider ${
+                  isDark ? 'text-zinc-400' : 'text-zinc-500'
+                }`}
+              >
+                Pengguna Ditemukan
+              </p>
+
+              {searching ? (
+                <div className="px-4 py-4 flex items-center gap-2 text-xs text-zinc-500">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Mencari...
+                </div>
+              ) : searchError ? (
+                <p className="px-4 py-3 text-xs text-red-500">{searchError}</p>
+              ) : searchResults.length === 0 ? (
+                <p className={`px-4 py-3 text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                  Tidak ada user dengan username tersebut.
+                </p>
+              ) : (
+                <div>
+                  {searchResults.map((target) => (
+                    <button
+                      key={target.id}
+                      onClick={() => handleStartChat(target)}
+                      disabled={openingRoomId === target.id}
+                      className={`w-full px-4 py-3 flex items-center justify-between text-left transition ${
+                        isDark ? 'hover:bg-zinc-800/60' : 'hover:bg-zinc-200/60'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Avatar
+                          src={target.avatar_url}
+                          name={target.display_name || target.username}
+                          size="sm"
+                        />
+                        <div className="min-w-0">
+                          <p className="font-semibold text-sm truncate">
+                            {target.display_name || target.username}
+                          </p>
+                          <p
+                            className={`text-xs truncate ${
+                              isDark ? 'text-zinc-400' : 'text-zinc-500'
+                            }`}
+                          >
+                            @{target.username}
+                            {target.bio ? ` • ${target.bio}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-xs font-semibold text-blue-600 shrink-0 ml-2">
+                        {openingRoomId === target.id ? 'Membuka...' : 'Chat'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
+
+          {/* Daftar Obrolan */}
+          <main className="flex-1 overflow-y-auto">
+            {rooms.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center px-6">
+                <MessageSquare
+                  className={`w-10 h-10 mb-3 ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`}
+                />
+                <p className="font-medium text-sm mb-1">Belum ada obrolan</p>
+                <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                  Ketik <span className="font-semibold">@username</span> temanmu di kolom atas
+                  untuk mulai chat.
+                </p>
+              </div>
+            ) : (
+              <div className={`divide-y ${isDark ? 'divide-zinc-800/80' : 'divide-zinc-100'}`}>
+                {rooms.map((item) => (
+                  <button
+                    key={item.roomId}
+                    onClick={() => router.push(`/chat/${item.roomId}`)}
+                    className={`w-full px-4 py-3.5 flex items-center gap-3 text-left transition ${
+                      isDark ? 'hover:bg-zinc-900' : 'hover:bg-zinc-50'
+                    }`}
+                  >
+                    <Avatar
+                      src={item.otherUser.avatar_url}
+                      name={item.otherUser.display_name || item.otherUser.username}
+                      size="md"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-semibold text-sm truncate">
+                          {item.otherUser.display_name || item.otherUser.username}
+                        </p>
+                        {item.lastMessage && (
+                          <span
+                            className={`text-[11px] shrink-0 ${
+                              isDark ? 'text-zinc-500' : 'text-zinc-400'
+                            }`}
+                          >
+                            {new Date(item.lastMessage.created_at).toLocaleTimeString('id-ID', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                        )}
+                      </div>
+                      <p
+                        className={`text-xs truncate mt-0.5 ${
+                          isDark ? 'text-zinc-400' : 'text-zinc-500'
+                        }`}
+                      >
+                        {item.lastMessage
+                          ? `${item.lastMessage.sender_id === user?.id ? 'Anda: ' : ''}${
+                              item.lastMessage.content
+                            }`
+                          : `@${item.otherUser.username}`}
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </main>
         </div>
+      ) : (
+        /* Tab Akun & Edit Profil */
+        <main className="flex-1 overflow-y-auto px-4 py-5">
+          <div className="max-w-lg mx-auto space-y-5 pb-6">
+            {/* Foto Profil */}
+            <div className="flex flex-col items-center text-center">
+              <div className="relative">
+                <Avatar
+                  src={editAvatar}
+                  name={editDisplayName || editUsername}
+                  size="xl"
+                  className="shadow-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="absolute bottom-0 right-0 p-2 rounded-full bg-blue-600 text-white shadow-md hover:bg-blue-700 transition"
+                  title="Ganti Foto Profil"
+                >
+                  <Camera className="w-4 h-4" />
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoSelect}
+                  className="hidden"
+                />
+              </div>
+
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-xs font-semibold text-blue-600"
+                >
+                  Ubah Foto
+                </button>
+                {editAvatar && (
+                  <button
+                    type="button"
+                    onClick={() => setEditAvatar('')}
+                    className="text-xs font-medium text-red-500 flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Hapus Foto
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {saveMessage.text && (
+              <div
+                className={`p-3 rounded-xl text-xs border ${
+                  saveMessage.type === 'success'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600'
+                    : 'bg-red-500/10 border-red-500/30 text-red-500'
+                }`}
+              >
+                {saveMessage.text}
+              </div>
+            )}
+
+            {/* Form Data Diri */}
+            <form onSubmit={handleSaveProfile} className="space-y-3.5">
+              <div>
+                <label
+                  className={`block text-xs font-medium mb-1.5 ${
+                    isDark ? 'text-zinc-300' : 'text-zinc-700'
+                  }`}
+                >
+                  Nama Tampilan
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editDisplayName}
+                  onChange={(e) => setEditDisplayName(e.target.value)}
+                  placeholder="Nama lengkap atau panggilan"
+                  className={inputClass}
+                />
+              </div>
+
+              <div>
+                <label
+                  className={`block text-xs font-medium mb-1.5 ${
+                    isDark ? 'text-zinc-300' : 'text-zinc-700'
+                  }`}
+                >
+                  Username
+                </label>
+                <div className="relative">
+                  <span className="text-zinc-400 text-sm font-semibold absolute left-3.5 top-2.5">
+                    @
+                  </span>
+                  <input
+                    type="text"
+                    required
+                    value={editUsername}
+                    onChange={(e) => setEditUsername(e.target.value.replace(/\s/g, ''))}
+                    placeholder="username_unik"
+                    className={`${inputClass} pl-8`}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label
+                  className={`block text-xs font-medium mb-1.5 ${
+                    isDark ? 'text-zinc-300' : 'text-zinc-700'
+                  }`}
+                >
+                  Bio
+                </label>
+                <textarea
+                  rows={3}
+                  value={editBio}
+                  onChange={(e) => setEditBio(e.target.value)}
+                  placeholder="Ceritakan sedikit tentang dirimu..."
+                  className={`${inputClass} resize-none`}
+                />
+              </div>
+
+              <div>
+                <label
+                  className={`block text-xs font-medium mb-1.5 ${
+                    isDark ? 'text-zinc-300' : 'text-zinc-700'
+                  }`}
+                >
+                  Status / Info Singkat
+                </label>
+                <input
+                  type="text"
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value)}
+                  placeholder="Contoh: Tersedia, Lagi sibuk, Ngoding..."
+                  className={inputClass}
+                />
+              </div>
+
+              <div>
+                <label
+                  className={`block text-xs font-medium mb-1.5 ${
+                    isDark ? 'text-zinc-300' : 'text-zinc-700'
+                  }`}
+                >
+                  Lokasi / Asal
+                </label>
+                <input
+                  type="text"
+                  value={editLocation}
+                  onChange={(e) => setEditLocation(e.target.value)}
+                  placeholder="Contoh: Depok, Indonesia"
+                  className={inputClass}
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={savingProfile}
+                className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold text-sm flex items-center justify-center gap-2 transition"
+              >
+                {savingProfile ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Check className="w-4 h-4" />
+                )}
+                Simpan Perubahan
+              </button>
+            </form>
+          </div>
+        </main>
       )}
 
-      {/* Daftar Obrolan */}
-      <main className="flex-1 overflow-y-auto">
-        {rooms.length === 0 ? (
-          <div className="h-full min-h-[55vh] flex flex-col items-center justify-center text-center px-6">
-            <MessageSquare className={`w-10 h-10 mb-3 ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`} />
-            <p className="font-medium text-sm mb-1">Belum ada obrolan</p>
-            <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-              Ketik <span className="font-semibold">@username</span> temanmu di kolom atas untuk mulai chat.
-            </p>
-          </div>
-        ) : (
-          <div className={`divide-y ${isDark ? 'divide-zinc-800/80' : 'divide-zinc-100'}`}>
-            {rooms.map((item) => (
-              <button
-                key={item.roomId}
-                onClick={() => router.push(`/chat/${item.roomId}`)}
-                className={`w-full px-4 py-3.5 flex items-center gap-3 text-left transition ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-zinc-50'}`}
-              >
-                <div className="w-11 h-11 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center shrink-0">
-                  {(item.otherUser.display_name || item.otherUser.username || 'U').charAt(0).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-semibold text-sm truncate">
-                      {item.otherUser.display_name || item.otherUser.username}
-                    </p>
-                    {item.lastMessage && (
-                      <span className={`text-[11px] shrink-0 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                        {new Date(item.lastMessage.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    )}
-                  </div>
-                  <p className={`text-xs truncate mt-0.5 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                    {item.lastMessage ? item.lastMessage.content : `@${item.otherUser.username}`}
-                  </p>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </main>
+      {/* Navigasi Bawah (Chat & Akun) */}
+      <nav
+        className={`grid grid-cols-2 border-t shrink-0 ${
+          isDark ? 'bg-[#09090B] border-zinc-800' : 'bg-white border-zinc-200'
+        }`}
+      >
+        <button
+          onClick={() => setActiveTab('chat')}
+          className={`py-2.5 flex flex-col items-center justify-center gap-1 transition ${
+            activeTab === 'chat'
+              ? 'text-blue-600'
+              : isDark
+                ? 'text-zinc-400 hover:text-zinc-200'
+                : 'text-zinc-500 hover:text-zinc-800'
+          }`}
+        >
+          <MessageSquare className="w-5 h-5" />
+          <span className="text-[11px] font-semibold">Chat</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('account');
+            setSaveMessage({ type: '', text: '' });
+          }}
+          className={`py-2.5 flex flex-col items-center justify-center gap-1 transition ${
+            activeTab === 'account'
+              ? 'text-blue-600'
+              : isDark
+                ? 'text-zinc-400 hover:text-zinc-200'
+                : 'text-zinc-500 hover:text-zinc-800'
+          }`}
+        >
+          <User className="w-5 h-5" />
+          <span className="text-[11px] font-semibold">Akun</span>
+        </button>
+      </nav>
     </div>
   );
 }
