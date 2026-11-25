@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   KeyRound,
   Lock,
@@ -9,6 +9,7 @@ import {
   Palette,
   CalendarDays,
   Bell,
+  Smartphone,
   Plus,
   Pencil,
   Share2,
@@ -25,6 +26,8 @@ import {
   BellOff,
   LogOut,
   CheckCircle2,
+  ImagePlus,
+  Download,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Avatar from './Avatar';
@@ -61,17 +64,26 @@ export default function AccountHub({
   setEditLocation,
   editAvatar,
   setEditAvatar,
+  editBannerUrl,
+  setEditBannerUrl,
+  editBannerType,
+  setEditBannerType,
   savingProfile,
   onSaveProfile,
   onUnblockUser,
+  isPwaInstalled,
+  pwaReady,
+  onInstallPwa,
 }) {
-  const [section, setSection] = useState(null); // null | account | privacy | lists | chat | appearance | events | notifications
+  const [section, setSection] = useState(null);
   const [events, setEvents] = useState([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [evTitle, setEvTitle] = useState('');
   const [evDate, setEvDate] = useState('');
   const [evLocation, setEvLocation] = useState('');
   const [savingEv, setSavingEv] = useState(false);
+  const [uploadingBanner, setUploadingBanner] = useState(false);
+  const bannerInputRef = useRef(null);
 
   // Kontrol VVIP khusus @dev
   const isDevOwner = String(profile?.username || '').toLowerCase() === 'dev';
@@ -106,6 +118,57 @@ export default function AccountHub({
     if (section === 'events') loadEvents();
     if (section === 'account' && isDevOwner) loadVvipUsers();
   }, [section, isDevOwner]);
+
+  const handleBannerSelect = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !user?.id) return;
+
+    const isVideo = file.type.startsWith('video/');
+    if (file.size > 18 * 1024 * 1024) {
+      alert('Ukuran maksimal sampul foto/video adalah 18 MB.');
+      return;
+    }
+
+    setUploadingBanner(true);
+    try {
+      const ext = isVideo
+        ? (file.name.split('.').pop() || 'mp4').toLowerCase()
+        : (file.name.split('.').pop() || 'jpg').toLowerCase();
+      const filePath = `banners/${user.id}-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from('chat-media')
+        .upload(filePath, file, { contentType: file.type, upsert: true });
+      if (upErr) throw upErr;
+
+      const { data: urlData } = supabase.storage.from('chat-media').getPublicUrl(filePath);
+      const nextUrl = urlData.publicUrl;
+      const nextType = isVideo ? 'video' : 'image';
+
+      const { error: dbErr } = await supabase
+        .from('profiles')
+        .update({ banner_url: nextUrl, banner_type: nextType })
+        .eq('id', user.id);
+      if (dbErr) throw dbErr;
+
+      setEditBannerUrl?.(nextUrl);
+      setEditBannerType?.(nextType);
+    } catch (err) {
+      alert('Gagal mengunggah sampul profil: ' + (err.message || 'Coba lagi.'));
+    } finally {
+      setUploadingBanner(false);
+    }
+  };
+
+  const handleRemoveBanner = async () => {
+    if (!user?.id) return;
+    await supabase
+      .from('profiles')
+      .update({ banner_url: '', banner_type: '' })
+      .eq('id', user.id);
+    setEditBannerUrl?.('');
+    setEditBannerType?.('');
+  };
 
   const handleAddEvent = async (e) => {
     e.preventDefault();
@@ -178,12 +241,17 @@ export default function AccountHub({
   const favCount = rooms.filter((r) => r.isFavorite).length;
   const archivedCount = rooms.filter((r) => r.isArchived).length;
 
+  const activeBannerUrl = editBannerUrl !== null && editBannerUrl !== undefined ? editBannerUrl : (profile?.banner_url || '');
+  const activeBannerType = editBannerType !== null && editBannerType !== undefined ? editBannerType : (profile?.banner_type || '');
+
   const menuItems = [
     {
       id: 'account',
       icon: KeyRound,
       title: 'Akun',
-      desc: isDevOwner ? 'Edit profil, kelola VVIP & keamanan' : 'Edit profil, bio & status',
+      desc: isDevOwner
+        ? 'Sampul foto/video, edit profil & kontrol VVIP'
+        : 'Sampul foto/video, edit profil, bio & status',
     },
     {
       id: 'privacy',
@@ -221,6 +289,16 @@ export default function AccountHub({
       title: 'Notifikasi',
       desc: pushState?.enabled ? 'Notifikasi push aktif' : 'Aktifkan notifikasi pesan & panggilan',
     },
+    {
+      id: 'pwa',
+      icon: Smartphone,
+      title: 'Aplikasi PWA',
+      desc: isPwaInstalled
+        ? 'Terpasang sebagai aplikasi di perangkat ini'
+        : pwaReady
+          ? 'Siap di-install langsung ke layar utama'
+          : 'Pasang rzchat sebagai aplikasi asli di HP',
+    },
   ];
 
   // SUB-HALAMAN DETAIL KETIKA MENU DIKLIK
@@ -247,6 +325,69 @@ export default function AccountHub({
 
           {section === 'account' && (
             <div className="space-y-4">
+              {/* Pengaturan Sampul Foto / Video Profil */}
+              <div className={`rounded-2xl p-4 space-y-3 ${cardClass}`}>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                    Sampul Atas Profil (Foto / Video)
+                  </h3>
+                  {activeBannerUrl && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveBanner}
+                      className="text-[11px] font-semibold text-red-500"
+                    >
+                      Hapus Sampul
+                    </button>
+                  )}
+                </div>
+                <div className="relative h-28 rounded-xl overflow-hidden border border-zinc-700/40 bg-emerald-500/10 flex items-center justify-center">
+                  {activeBannerUrl ? (
+                    activeBannerType === 'video' ? (
+                      <video
+                        src={activeBannerUrl}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <img
+                        src={activeBannerUrl}
+                        alt="Sampul Profil"
+                        className="w-full h-full object-cover"
+                      />
+                    )
+                  ) : (
+                    <p className="text-xs text-zinc-400">Belum ada foto atau video sampul</p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={uploadingBanner}
+                  onClick={() => bannerInputRef.current?.click()}
+                  className="w-full py-2.5 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-500 text-xs font-bold flex items-center justify-center gap-2 transition"
+                >
+                  {uploadingBanner ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Mengunggah Sampul...
+                    </>
+                  ) : (
+                    <>
+                      <ImagePlus className="w-4 h-4" /> Pilih Foto atau Video Sampul
+                    </>
+                  )}
+                </button>
+                <input
+                  ref={bannerInputRef}
+                  type="file"
+                  accept="image/*,video/*"
+                  onChange={handleBannerSelect}
+                  className="hidden"
+                />
+              </div>
+
               {/* Kontrol VVIP Khusus @dev */}
               {isDevOwner && (
                 <div className={`rounded-2xl p-4 space-y-3 ${cardClass}`}>
@@ -358,7 +499,7 @@ export default function AccountHub({
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-zinc-400 mb-1">
-                    Status Singkat (Tampil di kapsul profil)
+                    Status Singkat (Tampil tebal di atas foto profil)
                   </label>
                   <input
                     type="text"
@@ -685,59 +826,117 @@ export default function AccountHub({
               </div>
             </div>
           )}
+
+          {section === 'pwa' && (
+            <div className={`rounded-2xl p-4 space-y-3.5 ${cardClass}`}>
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-500/15 text-emerald-500 flex items-center justify-center shrink-0">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold">Install rzchat sebagai Aplikasi (PWA)</p>
+                  <p className="text-xs text-zinc-400">
+                    {isPwaInstalled
+                      ? 'Aplikasi sudah terpasang dan berjalan dalam mode standalone.'
+                      : 'Pasang langsung ke layar utama HP tanpa perlu lewat Play Store.'}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={onInstallPwa}
+                className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 transition"
+              >
+                <Download className="w-4 h-4" />
+                {isPwaInstalled
+                  ? 'Sudah Terpasang di Perangkat'
+                  : pwaReady
+                    ? 'Install Sekarang'
+                    : 'Buka & Install Aplikasi'}
+              </button>
+            </div>
+          )}
         </div>
       </main>
     );
   }
 
-  // TAMPILAN UTAMA TAB AKUN (MIRIP REFERENSI BERSIH)
+  // TAMPILAN UTAMA TAB AKUN (BANNER FOTO/VIDEO + STATUS TEBAL + 8 MENU)
   return (
     <main className="flex-1 overflow-y-auto">
       <div className="max-w-lg mx-auto pb-8">
-        {/* Banner Atas Bersih + Tombol Share & Edit */}
+        {/* Banner Atas (Mendukung Foto / Video Sampul) */}
         <div
-          className={`relative h-28 px-4 pt-3 flex items-start justify-end gap-2 ${
+          className={`relative h-36 px-4 pt-3 flex items-start justify-between gap-2 overflow-hidden ${
             isDark
               ? 'bg-gradient-to-b from-zinc-900 to-[#09090B]'
-              : 'bg-gradient-to-b from-emerald-50/90 to-zinc-100/60'
+              : 'bg-gradient-to-b from-emerald-500/15 to-zinc-100/60'
           }`}
         >
-          <button
-            type="button"
-            onClick={handleShareProfile}
-            title="Bagikan Profil"
-            className={`p-2 rounded-full transition ${
-              isDark ? 'hover:bg-zinc-800 text-zinc-200' : 'hover:bg-black/5 text-zinc-700'
-            }`}
-          >
-            <Share2 className="w-4 h-4" />
-          </button>
+          {activeBannerUrl && (
+            activeBannerType === 'video' ? (
+              <video
+                src={activeBannerUrl}
+                autoPlay
+                loop
+                muted
+                playsInline
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+            ) : (
+              <img
+                src={activeBannerUrl}
+                alt="Sampul Profil"
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+            )
+          )}
+          {activeBannerUrl && <div className="absolute inset-0 bg-black/25" />}
+
           <button
             type="button"
             onClick={() => setSection('account')}
-            title="Edit Profil"
-            className={`p-2 rounded-full transition ${
-              isDark ? 'hover:bg-zinc-800 text-zinc-200' : 'hover:bg-black/5 text-zinc-700'
-            }`}
+            title="Atur Foto / Video Sampul"
+            className="relative z-10 px-2.5 py-1.5 rounded-full bg-black/45 hover:bg-black/65 text-white backdrop-blur-xs text-[11px] font-semibold flex items-center gap-1.5 transition"
           >
-            <Pencil className="w-4 h-4" />
+            <ImagePlus className="w-3.5 h-3.5" /> Sampul
           </button>
+
+          <div className="relative z-10 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleShareProfile}
+              title="Bagikan Profil"
+              className="p-2 rounded-full bg-black/45 hover:bg-black/65 text-white backdrop-blur-xs transition"
+            >
+              <Share2 className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setSection('account')}
+              title="Edit Profil"
+              className="p-2 rounded-full bg-black/45 hover:bg-black/65 text-white backdrop-blur-xs transition"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Kartu Profil Tengah */}
         <div
-          className={`-mt-10 rounded-t-3xl px-5 pt-2 pb-4 flex flex-col items-center text-center ${
+          className={`relative z-10 -mt-10 rounded-t-3xl px-5 pt-2 pb-4 flex flex-col items-center text-center ${
             isDark ? 'bg-[#09090B]' : 'bg-white'
           }`}
         >
-          {/* Kapsul Status Singkat */}
+          {/* Kapsul Status Singkat (Teks Tebal & Kontras) */}
           <button
             type="button"
             onClick={() => setSection('account')}
-            className={`-mt-7 mb-2 px-3.5 py-1 rounded-full text-xs font-medium shadow-sm border transition ${
+            className={`-mt-7 mb-2 px-4 py-1 rounded-full text-xs font-extrabold tracking-wide shadow-md border transition ${
               isDark
-                ? 'bg-[#18181C] border-zinc-700 text-zinc-200'
-                : 'bg-white border-zinc-200 text-zinc-700'
+                ? 'bg-[#18181C] border-zinc-700 text-white'
+                : 'bg-white border-zinc-300 text-zinc-900'
             }`}
           >
             {editStatus || profile?.status_text || 'Tersedia'}

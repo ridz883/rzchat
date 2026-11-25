@@ -41,7 +41,7 @@ import {
   unsubscribeUserFromPush,
 } from '../lib/pushClient';
 import Avatar from '../components/Avatar';
-import VerifiedBadge from '../components/VerifiedBadge';
+import VerifiedBadge, { GroupBadge } from '../components/VerifiedBadge';
 import AccountHub from '../components/AccountHub';
 import GroupCreateModal from '../components/GroupCreateModal';
 import StatusSection from '../components/StatusSection';
@@ -90,6 +90,7 @@ const formatPreviewText = (msg) => {
   if (msg.media_type === 'album') return msg.content ? `🖼️ ${msg.content}` : '🖼️ Album Foto';
   if (msg.media_type === 'location') return '📍 Lokasi';
   if (msg.media_type === 'live_location') return '🟢 Lokasi Live';
+  if (msg.media_type === 'status_reply') return msg.content ? `💬 ${msg.content}` : '💬 Membalas status';
   if (msg.media_type === 'poll') return msg.content ? `📊 ${msg.content}` : '📊 Polling';
   return msg.content || '';
 };
@@ -134,6 +135,8 @@ export default function HomePage() {
 
   // Form edit akun
   const [editDisplayName, setEditDisplayName] = useState('');
+  const [editBannerUrl, setEditBannerUrl] = useState('');
+  const [editBannerType, setEditBannerType] = useState('');
   const [editUsername, setEditUsername] = useState('');
   const [editBio, setEditBio] = useState('');
   const [editStatus, setEditStatus] = useState('');
@@ -409,8 +412,15 @@ export default function HomePage() {
         pMap[p.id] = p;
       });
 
+      const seenCallIds = new Set();
+      const uniqueLogs = logs.filter((l) => {
+        const key = l.call_id || l.id;
+        if (seenCallIds.has(key)) return false;
+        seenCallIds.add(key);
+        return true;
+      });
       setCallLogs(
-        logs.map((l) => {
+        uniqueLogs.map((l) => {
           const isOutgoing = l.caller_id === userId;
           const peerId = isOutgoing ? l.callee_id : l.caller_id;
           return {
@@ -476,8 +486,16 @@ export default function HomePage() {
       }
       return;
     }
+    const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+    const isInAppWebView =
+      typeof navigator !== 'undefined' &&
+      /; wv\)|FBAN|FBAV|Instagram|Line|MicroMessenger|MiuiBrowser/i.test(navigator.userAgent);
+    if (isAndroid && isInAppWebView) {
+      window.location.href = `intent://${window.location.host}${window.location.pathname}#Intent;scheme=https;package=com.android.chrome;end`;
+      return;
+    }
     alert(
-      'Browser saat ini belum menampilkan pop-up install otomatis. Buka rzzchat.vercel.app di Google Chrome, lalu ketuk menu titik tiga (⋮) → "Install aplikasi" atau "Tambahkan ke layar utama".'
+      'Ketuk ikon menu browser (⋮) di pojok kanan atas lalu pilih "Install aplikasi" / "Tambahkan ke layar utama" untuk memasang rzchat.'
     );
   };
 
@@ -510,7 +528,7 @@ export default function HomePage() {
 
       const { data: prof } = await supabase
         .from('profiles')
-        .select('id, username, display_name, bio, status_text, location, avatar_url, onboarding_completed')
+        .select('id, username, display_name, bio, status_text, location, avatar_url, onboarding_completed, is_verified, badge_type, banner_url, banner_type')
         .eq('id', authUser.id)
         .maybeSingle();
 
@@ -522,6 +540,8 @@ export default function HomePage() {
 
       setProfile(prof);
       syncFormWithProfile(prof);
+      setEditBannerUrl(prof?.banner_url || '');
+      setEditBannerType(prof?.banner_type || '');
       await Promise.all([loadRooms(authUser.id), loadBlockedUsers(authUser.id)]);
       const ps = await getPushStatus();
       setPushState(ps);
@@ -546,6 +566,23 @@ export default function HomePage() {
         )
         .on('postgres_changes', { event: '*', schema: 'public', table: 'blocked_users' }, () => {
           loadBlockedUsers(authUser.id);
+        })
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, (payload) => {
+          const updated = payload.new;
+          if (!updated?.id) return;
+          if (updated.id === authUser.id) {
+            setProfile((prev) => ({ ...(prev || {}), ...updated }));
+          }
+          setRooms((prev) =>
+            prev.map((r) =>
+              !r.isGroup && r.otherUser?.id === updated.id
+                ? { ...r, otherUser: { ...r.otherUser, ...updated } }
+                : r
+            )
+          );
+          setSearchResults((prev) =>
+            prev.map((u) => (u.id === updated.id ? { ...u, ...updated } : u))
+          );
         })
         .subscribe();
       const onReSync = () => {
@@ -588,7 +625,7 @@ export default function HomePage() {
       setSearchError('');
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, username, display_name, avatar_url, bio')
+        .select('id, username, display_name, avatar_url, bio, is_verified, badge_type')
         .ilike('username', `%${q}%`)
         .neq('id', user.id)
         .limit(10);
@@ -1249,6 +1286,11 @@ export default function HomePage() {
                             <p className={`text-sm truncate ${hasUnread ? 'font-bold' : 'font-semibold'}`}>
                               {item.otherUser.display_name || item.otherUser.username}
                             </p>
+                            {item.isGroup ? (
+                              <GroupBadge />
+                            ) : (
+                              <VerifiedBadge user={item.otherUser} size="xs" />
+                            )}
                           </div>
                           <span
                             role="button"
@@ -1410,38 +1452,26 @@ export default function HomePage() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div className="flex items-center shrink-0">
                       <button
                         type="button"
                         onClick={() =>
                           callCtx?.startCall({
                             roomId: log.room_id,
                             targetUser: log.peer,
-                            callType: 'audio',
+                            callType: log.call_type === 'video' ? 'video' : 'audio',
                           })
                         }
-                        title="Telepon balik"
-                        className={`p-2 rounded-xl transition ${
-                          isDark ? 'hover:bg-zinc-800 text-blue-400' : 'hover:bg-blue-50 text-blue-600'
+                        title={log.call_type === 'video' ? 'Video call balik' : 'Telepon balik'}
+                        className={`p-2.5 rounded-xl transition ${
+                          isDark ? 'hover:bg-zinc-800 text-emerald-400' : 'hover:bg-emerald-50 text-emerald-600'
                         }`}
                       >
-                        <Phone className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          callCtx?.startCall({
-                            roomId: log.room_id,
-                            targetUser: log.peer,
-                            callType: 'video',
-                          })
-                        }
-                        title="Video call balik"
-                        className={`p-2 rounded-xl transition ${
-                          isDark ? 'hover:bg-zinc-800 text-blue-400' : 'hover:bg-blue-50 text-blue-600'
-                        }`}
-                      >
-                        <Video className="w-4 h-4" />
+                        {log.call_type === 'video' ? (
+                          <Video className="w-4 h-4" />
+                        ) : (
+                          <Phone className="w-4 h-4" />
+                        )}
                       </button>
                     </div>
                   </div>
@@ -1497,8 +1527,15 @@ export default function HomePage() {
           editAvatar={editAvatar}
           setEditAvatar={setEditAvatar}
           savingProfile={savingProfile}
+          editBannerUrl={editBannerUrl}
+          setEditBannerUrl={setEditBannerUrl}
+          editBannerType={editBannerType}
+          setEditBannerType={setEditBannerType}
           onSaveProfile={handleSaveProfile}
           onUnblockUser={handleUnblockUser}
+          isPwaInstalled={isPwaInstalled}
+          pwaReady={pwaReady}
+          onInstallPwa={handleSmartPwaInstall}
         />
       )}
       </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { X, Eye, Send, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -27,6 +27,43 @@ export default function StatusViewer({
   const [viewers, setViewers] = useState([]);
   const [showViewersSheet, setShowViewersSheet] = useState(false);
   const videoRef = useRef(null);
+  const historyPushedRef = useRef(false);
+  const closingViaPopRef = useRef(false);
+
+  const handleCloseSafe = useCallback(() => {
+    if (
+      typeof window !== 'undefined' &&
+      historyPushedRef.current &&
+      !closingViaPopRef.current &&
+      window.history.state?.rzchatStatusViewer
+    ) {
+      historyPushedRef.current = false;
+      window.history.back();
+      return;
+    }
+    historyPushedRef.current = false;
+    onClose?.();
+  }, [onClose]);
+
+  // Tangkap tombol/gesture Back Android agar menutup StatusViewer, bukan keluar dari PWA
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!window.history.state?.rzchatStatusViewer) {
+      window.history.pushState({ ...(window.history.state || {}), rzchatStatusViewer: true }, '');
+      historyPushedRef.current = true;
+    }
+
+    const onPopState = () => {
+      closingViaPopRef.current = true;
+      historyPushedRef.current = false;
+      onClose?.();
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      window.removeEventListener('popstate', onPopState);
+    };
+  }, [onClose]);
 
   const current = items[idx];
 
@@ -82,7 +119,7 @@ export default function StatusViewer({
         if (next >= 100) {
           clearInterval(timer);
           if (idx < items.length - 1) setIdx((i) => i + 1);
-          else onClose?.();
+          else handleCloseSafe();
           return 100;
         }
         return next;
@@ -90,7 +127,7 @@ export default function StatusViewer({
     }, stepMs);
 
     return () => clearInterval(timer);
-  }, [current, paused, showViewersSheet, idx, items.length, onClose]);
+  }, [current, paused, showViewersSheet, idx, items.length, handleCloseSafe]);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -108,7 +145,7 @@ export default function StatusViewer({
 
   const goNext = () => {
     if (idx < items.length - 1) setIdx((i) => i + 1);
-    else onClose?.();
+    else handleCloseSafe();
   };
 
   const sendStatusReply = async (textToSend) => {
@@ -121,13 +158,24 @@ export default function StatusViewer({
       });
       if (rErr) throw rErr;
 
-      const label = current.caption ? `"${current.caption.slice(0, 40)}"` : 'Status';
+      const statusMeta = {
+        statusId: current.id,
+        mediaType: current.media_type || 'text',
+        mediaUrl: current.media_url || '',
+        caption: current.caption || '',
+        bgStyle: current.bg_style || '',
+        ownerName: group.user.display_name || group.user.username || 'Pengguna',
+      };
+
       await supabase.from('messages').insert({
         room_id: roomId,
         sender_id: currentUser.id,
-        content: `Membalas Status (${label}): ${msgText}`,
+        content: msgText,
+        media_type: 'status_reply',
+        status_reply: statusMeta,
       });
       setReplyText('');
+      historyPushedRef.current = false;
       onClose?.();
       router.push(`/chat/${roomId}`);
     } finally {
@@ -139,7 +187,7 @@ export default function StatusViewer({
     if (!isMine) return;
     await supabase.from('statuses').delete().eq('id', current.id);
     onDeleted?.();
-    onClose?.();
+    handleCloseSafe();
   };
 
   return (
@@ -190,7 +238,7 @@ export default function StatusViewer({
                 <Trash2 className="w-4 h-4" />
               </button>
             )}
-            <button type="button" onClick={onClose} className="p-2 rounded-full bg-white/15">
+            <button type="button" onClick={handleCloseSafe} className="p-2 rounded-full bg-white/15">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -297,7 +345,7 @@ export default function StatusViewer({
               <button
                 type="submit"
                 disabled={sendingReply || !replyText.trim()}
-                className="p-2.5 rounded-full bg-blue-600 text-white disabled:opacity-50"
+                className="p-2.5 rounded-full bg-emerald-600 text-white disabled:opacity-50"
               >
                 <Send className="w-4 h-4" />
               </button>
@@ -314,7 +362,7 @@ export default function StatusViewer({
         >
           <div className="flex items-center justify-between">
             <p className="text-xs font-bold flex items-center gap-1.5">
-              <Eye className="w-4 h-4 text-blue-400" /> Penonton Status ({viewers.length})
+              <Eye className="w-4 h-4 text-emerald-400" /> Penonton Status ({viewers.length})
             </p>
             <button type="button" onClick={() => setShowViewersSheet(false)} className="p-1">
               <X className="w-4 h-4" />

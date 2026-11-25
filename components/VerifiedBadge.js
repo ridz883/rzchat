@@ -23,6 +23,18 @@ export function BlueCheckIcon({ className = 'w-4 h-4' }) {
   );
 }
 
+export function GroupBadge({ className = '' }) {
+  return (
+    <span
+      title="Obrolan Grup"
+      className={`inline-flex items-center gap-1 px-1.5 py-[1px] rounded-[5px] text-[9px] font-extrabold tracking-[0.14em] uppercase bg-emerald-500/12 text-emerald-500 border border-emerald-500/35 shrink-0 ${className}`}
+    >
+      <span className="w-1.5 h-1.5 rounded-[2px] bg-emerald-500 inline-block" />
+      GRUP
+    </span>
+  );
+}
+
 export default function VerifiedBadge({
   user,
   size = 'sm',
@@ -53,7 +65,7 @@ export default function VerifiedBadge({
       {showTag && badgeType === 'vvip' && (
         <span
           title="VVIP Member"
-          className="inline-flex items-center px-1.5 py-[1px] rounded-[5px] text-[9px] font-extrabold tracking-[0.14em] uppercase bg-amber-500/15 text-amber-500 border border-amber-500/40"
+          className="inline-flex items-center px-1.5 py-[1px] rounded-[5px] text-[9px] font-extrabold tracking-[0.14em] uppercase bg-gradient-to-r from-amber-500/20 to-yellow-500/20 text-amber-500 border border-amber-500/45 shadow-xs"
         >
           VVIP
         </span>

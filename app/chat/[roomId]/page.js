@@ -47,7 +47,7 @@ import { useTheme } from '../../../lib/useTheme';
 import { useCall } from '../../../components/CallProvider';
 import { sendPushNotification } from '../../../lib/pushClient';
 import Avatar from '../../../components/Avatar';
-import VerifiedBadge from '../../../components/VerifiedBadge';
+import VerifiedBadge, { GroupBadge } from '../../../components/VerifiedBadge';
 import LinkPreviewCard from '../../../components/LinkPreviewCard';
 import VoiceNotePlayer from '../../../components/VoiceNotePlayer';
 import ZoomableLightbox from '../../../components/ZoomableLightbox';
@@ -174,6 +174,9 @@ function ChatRoomContent() {
   const [mentionQuery, setMentionQuery] = useState(null);
   const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
   const inlineVideoRefs = useRef({});
+  const [swipeReply, setSwipeReply] = useState({ msgId: null, offsetX: 0 });
+  const swipeGestureRef = useRef({ msgId: null, startX: 0, startY: 0, triggered: false });
+  const didSwipeMsgRef = useRef(false);
   const [showSearch, setShowSearch] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [searchIdx, setSearchIdx] = useState(0);
@@ -297,7 +300,7 @@ function ChatRoomContent() {
       if (otherMember?.user_id) {
         const { data: prof } = await supabase
           .from('profiles')
-          .select('id, username, display_name, bio, status_text, location, avatar_url, created_at, last_seen')
+          .select('id, username, display_name, bio, status_text, location, avatar_url, created_at, last_seen, is_verified, badge_type')
           .eq('id', otherMember.user_id)
           .maybeSingle();
         opponent = prof || { id: otherMember.user_id, username: 'pengguna', display_name: 'Pengguna' };
@@ -308,7 +311,7 @@ function ChatRoomContent() {
       const { data: initialMsgs } = await supabase
         .from('messages')
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions, status_reply'
         )
         .eq('room_id', roomId)
         .order('created_at', { ascending: true });
@@ -589,7 +592,7 @@ function ChatRoomContent() {
           media_urls: uploadedUrls,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions, status_reply'
         )
         .single();
 
@@ -834,7 +837,7 @@ function ChatRoomContent() {
           is_view_once: false,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions, status_reply'
         )
         .single();
       if (error) throw error;
@@ -883,7 +886,7 @@ function ChatRoomContent() {
           is_view_once: false,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions, status_reply'
         )
         .single();
       if (error) throw error;
@@ -1044,7 +1047,7 @@ function ChatRoomContent() {
               is_view_once: false,
             })
             .select(
-              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
+              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions, status_reply'
             )
             .single();
           if (error) throw error;
@@ -1198,7 +1201,7 @@ function ChatRoomContent() {
         poll_id: pollRow.id,
       })
       .select(
-        'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
+        'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions, status_reply'
       )
       .single();
     if (!mErr && msgRow) {
@@ -1229,7 +1232,7 @@ function ChatRoomContent() {
           reply_to_id: replyingTo?.id || null,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions, status_reply'
         )
         .single();
       if (mErr) throw mErr;
@@ -1372,7 +1375,7 @@ function ChatRoomContent() {
           is_forwarded: true,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions, status_reply'
         )
         .single();
       if (error) throw error;
@@ -1537,7 +1540,7 @@ function ChatRoomContent() {
               reply_to_id: replyingTo?.id || null,
             })
             .select(
-              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
+              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions, status_reply'
             )
             .single();
           if (msgErr) throw msgErr;
@@ -1666,7 +1669,7 @@ function ChatRoomContent() {
                     ? roomMeta.name || 'Grup'
                     : otherUser?.display_name || otherUser?.username || 'Obrolan'}
                 </span>
-                {!roomMeta?.is_group && <VerifiedBadge user={otherUser} size="xs" />}
+                {roomMeta?.is_group ? <GroupBadge /> : <VerifiedBadge user={otherUser} size="xs" />}
               </p>
               <p
                 className={`text-[11px] truncate ${
@@ -1897,13 +1900,69 @@ function ChatRoomContent() {
               ([, users]) => Array.isArray(users) && users.length > 0
             );
 
+            const isSwipingThis = swipeReply.msgId === msg.id;
+            const swipeDx = isSwipingThis ? swipeReply.offsetX : 0;
+
             return (
               <div
                 id={`msg-${msg.id}`}
                 key={msg.id}
-                className={`flex flex-col ${isMine ? 'items-end' : 'items-start'}`}
+                onTouchStart={(e) => {
+                  if (msg.is_deleted || e.touches.length !== 1) return;
+                  didSwipeMsgRef.current = false;
+                  swipeGestureRef.current = {
+                    msgId: msg.id,
+                    startX: e.touches[0].clientX,
+                    startY: e.touches[0].clientY,
+                    triggered: false,
+                  };
+                }}
+                onTouchMove={(e) => {
+                  const g = swipeGestureRef.current;
+                  if (g.msgId !== msg.id || e.touches.length !== 1) return;
+                  const dx = e.touches[0].clientX - g.startX;
+                  const dy = e.touches[0].clientY - g.startY;
+                  if (Math.abs(dy) > Math.abs(dx) && Math.abs(dx) < 16) return;
+                  if (Math.abs(dx) > 10) didSwipeMsgRef.current = true;
+                  const clamped = Math.max(-72, Math.min(72, dx));
+                  setSwipeReply({ msgId: msg.id, offsetX: clamped });
+                  if (!g.triggered && Math.abs(dx) >= 48) {
+                    g.triggered = true;
+                    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                      navigator.vibrate(14);
+                    }
+                    setReplyingTo(msg);
+                    setTimeout(() => {
+                      const inp = document.querySelector('input[placeholder*="pesan" i], textarea[placeholder*="pesan" i]');
+                      inp?.focus();
+                    }, 40);
+                  }
+                }}
+                onTouchEnd={() => {
+                  if (swipeGestureRef.current.msgId === msg.id) {
+                    swipeGestureRef.current = { msgId: null, startX: 0, startY: 0, triggered: false };
+                    setSwipeReply({ msgId: null, offsetX: 0 });
+                  }
+                }}
+                className={`relative flex flex-col select-none ${isMine ? 'items-end' : 'items-start'}`}
               >
-                <div className={`flex items-end gap-2 max-w-[85%] ${isMine ? 'justify-end' : 'justify-start'}`}>
+                {isSwipingThis && Math.abs(swipeDx) > 14 && (
+                  <div
+                    className={`absolute top-1/2 -translate-y-1/2 ${
+                      swipeDx > 0 ? 'left-1.5' : 'right-1.5'
+                    } w-7 h-7 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow pointer-events-none`}
+                  >
+                    <Reply className="w-3.5 h-3.5" />
+                  </div>
+                )}
+                <div
+                  style={
+                    isSwipingThis && swipeDx !== 0
+                      ? { transform: `translateX(${swipeDx}px)`, transition: 'transform 60ms ease-out' }
+                      : undefined
+                  }
+                  className={`flex items-end gap-2 max-w-[85%] ${isMine ? 'justify-end' : 'justify-start'}`}
+                >
                   {!isMine && (() => {
                     const senderProf = roomMeta?.is_group
                       ? groupMembers.find((gm) => gm.user_id === msg.sender_id)?.profile
@@ -1920,6 +1979,10 @@ function ChatRoomContent() {
 
                   <div
                     onClick={() => {
+                      if (didSwipeMsgRef.current) {
+                        didSwipeMsgRef.current = false;
+                        return;
+                      }
                       if (!msg.is_deleted) setSelectedMsg(msg);
                     }}
                     className={`px-3 py-2 rounded-2xl text-sm break-words shadow-xs cursor-pointer select-text ${
@@ -1945,31 +2008,90 @@ function ChatRoomContent() {
                       );
                     })()}
 
+                    {/* Kartu Balasan Status (Foto / Video / Teks Berwarna) */}
+                    {msg.status_reply && !msg.is_deleted && (() => {
+                      const sr = msg.status_reply;
+                      return (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className={`mb-1.5 p-2 rounded-xl border-l-2 flex items-center gap-2.5 min-w-[190px] ${
+                            isMine
+                              ? 'bg-black/20 border-white/70 text-white'
+                              : isDark
+                                ? 'bg-zinc-900/85 border-emerald-500 text-zinc-200'
+                                : 'bg-zinc-100 border-emerald-600 text-zinc-800'
+                          }`}
+                        >
+                          {sr.mediaType === 'image' && sr.mediaUrl ? (
+                            <img
+                              src={sr.mediaUrl}
+                              alt="Status"
+                              className="w-11 h-14 rounded-lg object-cover shrink-0 bg-black/20"
+                            />
+                          ) : sr.mediaType === 'video' && sr.mediaUrl ? (
+                            <div className="relative w-11 h-14 rounded-lg overflow-hidden shrink-0 bg-black">
+                              <video
+                                src={sr.mediaUrl}
+                                muted
+                                playsInline
+                                preload="metadata"
+                                className="w-full h-full object-cover"
+                              />
+                              <span className="absolute inset-0 flex items-center justify-center bg-black/30 text-[10px] text-white font-bold">
+                                ▶
+                              </span>
+                            </div>
+                          ) : (
+                            <div
+                              style={sr.bgStyle ? { backgroundImage: sr.bgStyle } : undefined}
+                              className="w-11 h-14 rounded-lg shrink-0 bg-emerald-600 flex items-center justify-center p-1 text-[8px] font-bold text-white text-center leading-tight overflow-hidden"
+                            >
+                              {(sr.caption || 'Status').slice(0, 24)}
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[10px] font-extrabold uppercase tracking-wider opacity-80">
+                              Membalas Status · {sr.ownerName || 'Teman'}
+                            </p>
+                            <p className="text-xs font-medium truncate mt-0.5">
+                              {sr.caption || (sr.mediaType === 'video' ? '🎬 Video Status' : sr.mediaType === 'image' ? '📷 Foto Status' : 'Status')}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* Quote Reply */}
-                    {repliedMsg && !msg.is_deleted && (
-                      <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          document
-                            .getElementById(`msg-${repliedMsg.id}`)
-                            ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        }}
-                        className={`mb-1.5 pl-2.5 pr-2 py-1 rounded-lg border-l-2 text-xs ${
-                          isMine
-                            ? 'bg-blue-700/60 border-blue-200 text-blue-50'
-                            : isDark
-                              ? 'bg-zinc-900/70 border-blue-400 text-zinc-300'
-                              : 'bg-zinc-100 border-blue-600 text-zinc-600'
-                        }`}
-                      >
-                        <p className="font-bold text-[11px] truncate">
-                          {repliedMsg.sender_id === currentUser?.id
-                            ? 'Anda'
-                            : otherUser?.display_name || otherUser?.username}
-                        </p>
-                        <p className="truncate opacity-85">{snippetOf(repliedMsg)}</p>
-                      </div>
-                    )}
+                    {repliedMsg && !msg.is_deleted && (() => {
+                      const repSenderName =
+                        repliedMsg.sender_id === currentUser?.id
+                          ? 'Anda'
+                          : roomMeta?.is_group
+                            ? groupMembers.find((gm) => gm.user_id === repliedMsg.sender_id)?.profile?.display_name ||
+                              groupMembers.find((gm) => gm.user_id === repliedMsg.sender_id)?.profile?.username ||
+                              'Anggota'
+                            : otherUser?.display_name || otherUser?.username;
+                      return (
+                        <div
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            document
+                              .getElementById(`msg-${repliedMsg.id}`)
+                              ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          }}
+                          className={`mb-1.5 pl-2.5 pr-2 py-1 rounded-lg border-l-2 text-xs ${
+                            isMine
+                              ? 'bg-black/20 border-white/70 text-white'
+                              : isDark
+                                ? 'bg-zinc-900/70 border-emerald-400 text-zinc-300'
+                                : 'bg-zinc-100 border-emerald-600 text-zinc-600'
+                          }`}
+                        >
+                          <p className="font-bold text-[11px] truncate">{repSenderName}</p>
+                          <p className="truncate opacity-85">{snippetOf(repliedMsg)}</p>
+                        </div>
+                      );
+                    })()}
 
                     <span id={`msg-${msg.id}`} className="scroll-mt-28 block h-0" />
                     {highlightedMsgId === msg.id && (

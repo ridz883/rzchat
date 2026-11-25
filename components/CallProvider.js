@@ -243,10 +243,44 @@ export default function CallProvider({ children }) {
     ];
   };
 
+  const promoteToConnected = useCallback(
+    (pc, targetUserId, callId, notifyPeer = true) => {
+      stopTone();
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      const hasDtls =
+        Boolean(pc?.localDescription?.sdp?.includes('a=fingerprint:')) &&
+        Boolean(pc?.remoteDescription?.sdp?.includes('a=fingerprint:'));
+      if (!callConnectedAtRef.current) callConnectedAtRef.current = Date.now();
+      setCallState('connected');
+      setCallStatusText(hasDtls ? 'Terhubung · HD' : 'Terhubung');
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = 1.0;
+        remoteAudioRef.current.play().catch(() => {});
+      }
+      if (!callTimerRef.current) {
+        callTimerRef.current = setInterval(() => {
+          setCallDuration((d) => d + 1);
+        }, 1000);
+      }
+      if (notifyPeer && targetUserId && callId && authUser?.id) {
+        sendSignal(targetUserId, {
+          type: 'connected-ack',
+          callId,
+          fromId: authUser.id,
+        }).catch(() => {});
+      }
+    },
+    [authUser, sendSignal, stopTone]
+  );
+
   const createPeerConnection = useCallback(
     async (targetUserId, callId) => {
       const iceServers = await fetchIceServers();
-      const pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 6 });
+      const pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 8 });
 
       const remoteMedia = new MediaStream();
       setRemoteStream(remoteMedia);
@@ -269,6 +303,17 @@ export default function CallProvider({ children }) {
           remoteAudioRef.current.volume = 1.0;
           remoteAudioRef.current.play().catch(() => {});
         }
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = nextStream;
+          remoteVideoRef.current.play().catch(() => {});
+        }
+        if (
+          callStateRef.current === 'connecting' ||
+          pc.iceConnectionState === 'connected' ||
+          pc.iceConnectionState === 'completed'
+        ) {
+          promoteToConnected(pc, targetUserId, callId, true);
+        }
       };
 
       pc.onicecandidate = (event) => {
@@ -282,30 +327,20 @@ export default function CallProvider({ children }) {
         }
       };
 
+      pc.oniceconnectionstatechange = () => {
+        const iceSt = pc.iceConnectionState;
+        if (iceSt === 'connected' || iceSt === 'completed') {
+          promoteToConnected(pc, targetUserId, callId, true);
+        } else if (iceSt === 'failed') {
+          setCallStatusText('Koneksi terputus');
+          setTimeout(() => cleanupCall(), 1500);
+        }
+      };
+
       pc.onconnectionstatechange = () => {
         const st = pc.connectionState;
         if (st === 'connected') {
-          stopTone();
-          if (timeoutRef.current) {
-            clearTimeout(timeoutRef.current);
-            timeoutRef.current = null;
-          }
-          const hasDtls =
-            Boolean(pc.localDescription?.sdp?.includes('a=fingerprint:')) &&
-            Boolean(pc.remoteDescription?.sdp?.includes('a=fingerprint:'));
-          if (!callConnectedAtRef.current) callConnectedAtRef.current = Date.now();
-          setCallState('connected');
-          setCallStatusText(hasDtls ? 'Terhubung · DTLS-SRTP' : 'Terhubung');
-          if (remoteAudioRef.current) {
-            remoteAudioRef.current.muted = false;
-            remoteAudioRef.current.volume = 1.0;
-            remoteAudioRef.current.play().catch(() => {});
-          }
-          if (!callTimerRef.current) {
-            callTimerRef.current = setInterval(() => {
-              setCallDuration((d) => d + 1);
-            }, 1000);
-          }
+          promoteToConnected(pc, targetUserId, callId, true);
         } else if (st === 'failed') {
           setCallStatusText('Koneksi terputus');
           setTimeout(() => cleanupCall(), 1500);
@@ -317,7 +352,7 @@ export default function CallProvider({ children }) {
       pcRef.current = pc;
       return pc;
     },
-    [authUser, sendSignal, stopTone, cleanupCall]
+    [authUser, sendSignal, promoteToConnected, cleanupCall]
   );
 
   // Mulai panggilan keluar (Telepon Suara / Video Call)
@@ -354,7 +389,7 @@ export default function CallProvider({ children }) {
           },
           video:
             callType === 'video'
-              ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
+              ? { facingMode: 'user', width: { ideal: 1280, min: 640 }, height: { ideal: 720, min: 480 }, frameRate: { ideal: 30 } }
               : false,
         });
 
@@ -388,11 +423,17 @@ export default function CallProvider({ children }) {
         const pc = await createPeerConnection(targetUser.id, callId);
         stream.getTracks().forEach((track) => {
           const sender = pc.addTrack(track, stream);
-          if (track.kind === 'audio' && sender?.getParameters) {
+          if (sender?.getParameters) {
             try {
               const params = sender.getParameters();
               if (!params.encodings) params.encodings = [{}];
-              params.encodings[0].maxBitrate = 64000;
+              if (track.kind === 'audio') {
+                params.encodings[0].maxBitrate = 96000;
+              } else if (track.kind === 'video') {
+                params.encodings[0].maxBitrate = 2000000;
+                params.encodings[0].maxFramerate = 30;
+                params.degradationPreference = 'maintain-resolution';
+              }
               sender.setParameters(params).catch(() => {});
             } catch {}
           }
@@ -469,7 +510,7 @@ export default function CallProvider({ children }) {
         },
         video:
           info.callType === 'video'
-            ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
+            ? { facingMode: 'user', width: { ideal: 1280, min: 640 }, height: { ideal: 720, min: 480 }, frameRate: { ideal: 30 } }
             : false,
       });
 
@@ -570,7 +611,7 @@ export default function CallProvider({ children }) {
       let newVideoStream = null;
       try {
         newVideoStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { exact: nextMode }, width: { ideal: 640 }, height: { ideal: 480 } },
+          video: { facingMode: { exact: nextMode }, width: { ideal: 1280, min: 640 }, height: { ideal: 720, min: 480 }, frameRate: { ideal: 30 } },
         });
       } catch {
         const devices = await navigator.mediaDevices.enumerateDevices();
@@ -578,11 +619,11 @@ export default function CallProvider({ children }) {
         const altDevice = videoInputs.find((d) => d.deviceId && d.deviceId !== oldDeviceId);
         if (altDevice) {
           newVideoStream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId: { exact: altDevice.deviceId }, width: { ideal: 640 }, height: { ideal: 480 } },
+            video: { deviceId: { exact: altDevice.deviceId }, width: { ideal: 1280, min: 640 }, height: { ideal: 720, min: 480 }, frameRate: { ideal: 30 } },
           });
         } else {
           newVideoStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: nextMode, width: { ideal: 640 }, height: { ideal: 480 } },
+            video: { facingMode: nextMode, width: { ideal: 1280, min: 640 }, height: { ideal: 720, min: 480 }, frameRate: { ideal: 30 } },
           });
         }
       }
@@ -739,6 +780,16 @@ export default function CallProvider({ children }) {
               }
               pendingIceRef.current = [];
             } catch {}
+          }
+        } else if (payload.type === 'connected-ack') {
+          if (
+            pcRef.current &&
+            callInfoRef.current &&
+            payload.callId === callInfoRef.current.callId &&
+            payload.fromId === callInfoRef.current.peer?.id &&
+            callStateRef.current !== 'connected'
+          ) {
+            promoteToConnected(pcRef.current, callInfoRef.current.peer.id, callInfoRef.current.callId, false);
           }
         } else if (payload.type === 'ice') {
           if (

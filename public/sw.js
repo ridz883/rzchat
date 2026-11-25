@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rzchat-pwa-v10';
+const CACHE_NAME = 'rzchat-pwa-v11';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
