@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react';
 import { Plus, Trash2, Loader2, Smile, Check, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { ANDROID_IMAGE_ACCEPT } from '../lib/security';
 
 function renderStickerBlob(file, captionText, shape = 'rounded') {
   return new Promise((resolve, reject) => {
@@ -180,7 +181,7 @@ export default function StickerStudio({
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept={ANDROID_IMAGE_ACCEPT}
         onChange={handlePickPhoto}
         className="hidden"
       />
@@ -324,7 +325,7 @@ export default function StickerStudio({
                   className="w-full h-full object-contain rounded-xl"
                 />
               </button>
-              {!compact && (
+              {(
                 <button
                   type="button"
                   disabled={deletingId === st.id}

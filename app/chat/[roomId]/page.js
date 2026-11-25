@@ -37,6 +37,8 @@ import {
   Navigation,
   Plus,
   ExternalLink,
+  Palette,
+  Star,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useTheme } from '../../../lib/useTheme';
@@ -48,8 +50,19 @@ import VoiceNotePlayer from '../../../components/VoiceNotePlayer';
 import ZoomableLightbox from '../../../components/ZoomableLightbox';
 import VideoLightbox from '../../../components/VideoLightbox';
 import StickerStudio from '../../../components/StickerStudio';
+import GifPicker from '../../../components/GifPicker';
+import {
+  CHAT_ACCENTS,
+  CHAT_WALLPAPERS,
+  loadChatAppearance,
+  saveChatAppearance,
+  getAccentClass,
+  getWallpaperStyle,
+  compressWallpaperFile,
+} from '../../../lib/chatAppearance';
 import {
   ANDROID_MEDIA_ACCEPT,
+  ANDROID_IMAGE_ACCEPT,
   sanitizeText,
   validateUploadFile,
   formatFileSize,
@@ -57,6 +70,14 @@ import {
 import { saveMediaToDevice } from '../../../lib/mediaHelper';
 
 const QUICK_EMOJIS = ['❤️', '😂', '👍', '🔥', '😮', '😢'];
+const MORE_EMOJIS = [
+  '😍', '🥰', '😘', '😊', '😁', '🤣', '😅', '😉',
+  '😎', '🤩', '🥳', '🤯', '😱', '😭', '😤', '😡',
+  '🤔', '🤭', '🤫', '😴', '🤒', '🤮', '🤡', '👻',
+  '💀', '🙏', '👏', '🙌', '🤝', '💪', '👌', '✌️',
+  '💔', '💯', '✨', '🎉', '🎊', '💐', '🌹', '☕',
+  '🍕', '⚽', '🏆', '🎵', '📌', '✅', '❌', '⚡',
+];
 
 const formatDuration = (sec) => {
   const m = Math.floor(sec / 60);
@@ -97,6 +118,7 @@ const snippetOf = (msg) => {
   if (msg.media_type === 'video') return msg.content ? `🎬 ${msg.content}` : '🎬 Video';
   if (msg.media_type === 'file') return msg.file_name ? `📄 ${msg.file_name}` : '📄 Dokumen';
   if (msg.media_type === 'sticker') return '🎨 Stiker';
+  if (msg.media_type === 'gif') return '🎞️ GIF';
   if (msg.media_type === 'album') return msg.content ? `🖼️ ${msg.content}` : '🖼️ Album Foto';
   if (msg.media_type === 'location') return '📍 Lokasi';
   return msg.content || '';
@@ -146,6 +168,14 @@ function ChatRoomContent() {
   const [pendingAlbum, setPendingAlbum] = useState([]);
   const [sendingLocation, setSendingLocation] = useState(false);
   const albumAddInputRef = useRef(null);
+  const [drawerTab, setDrawerTab] = useState('sticker');
+  const [showMoreEmojis, setShowMoreEmojis] = useState(false);
+  const [customEmojiInput, setCustomEmojiInput] = useState('');
+  const [starredIds, setStarredIds] = useState(new Set());
+  const [appearance, setAppearance] = useState({ accent: 'blue', wallpaper: 'default', customBg: '' });
+  const [showAppearanceModal, setShowAppearanceModal] = useState(false);
+  const wallpaperInputRef = useRef(null);
+  const draftLoadedRef = useRef(false);
 
   // Media + View Once (1x Lihat)
   const [pendingMedia, setPendingMedia] = useState(null);
@@ -457,6 +487,7 @@ function ChatRoomContent() {
         );
         setEditingMsg(null);
         setText('');
+      try { localStorage.removeItem(`rzchat_draft_${roomId}`); } catch {}
         emitTyping(false);
       } catch (err) {
         alert('Gagal mengedit pesan: ' + err.message);
@@ -677,6 +708,124 @@ function ChatRoomContent() {
           : m
       )
     );
+  };
+
+  // Muat Wallpaper, Warna Aksen & Draft Otomatis per room
+  useEffect(() => {
+    if (!roomId) return;
+    setAppearance(loadChatAppearance(roomId));
+    try {
+      const savedDraft = localStorage.getItem(`rzchat_draft_${roomId}`) || '';
+      if (savedDraft) setText(savedDraft);
+    } catch {}
+    draftLoadedRef.current = true;
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!roomId || !draftLoadedRef.current || editingMsg) return;
+    try {
+      if (text.trim()) localStorage.setItem(`rzchat_draft_${roomId}`, text);
+      else localStorage.removeItem(`rzchat_draft_${roomId}`);
+    } catch {}
+  }, [text, roomId, editingMsg]);
+
+  // Muat daftar ID pesan berbintang milik user di room ini
+  useEffect(() => {
+    if (!currentUser?.id || !roomId) return;
+    supabase
+      .from('starred_messages')
+      .select('message_id')
+      .eq('user_id', currentUser.id)
+      .eq('room_id', String(roomId))
+      .then(({ data }) => {
+        setStarredIds(new Set((data || []).map((r) => r.message_id)));
+      });
+  }, [currentUser?.id, roomId]);
+
+  const handleToggleStarMessage = async (msg) => {
+    if (!currentUser?.id || !msg?.id) return;
+    setSelectedMsg(null);
+    const isStarred = starredIds.has(msg.id);
+    if (isStarred) {
+      setStarredIds((prev) => {
+        const next = new Set(prev);
+        next.delete(msg.id);
+        return next;
+      });
+      await supabase
+        .from('starred_messages')
+        .delete()
+        .eq('user_id', currentUser.id)
+        .eq('message_id', msg.id);
+    } else {
+      setStarredIds((prev) => new Set(prev).add(msg.id));
+      const { error } = await supabase.from('starred_messages').insert({
+        user_id: currentUser.id,
+        message_id: msg.id,
+        room_id: String(roomId),
+      });
+      if (error) {
+        alert('Gagal membintangi pesan: ' + error.message);
+      }
+    }
+  };
+
+  const handleUpdateAppearance = (patch) => {
+    setAppearance((prev) => {
+      const next = { ...prev, ...patch };
+      saveChatAppearance(roomId, next);
+      return next;
+    });
+  };
+
+  const handlePickCustomWallpaper = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await compressWallpaperFile(file);
+      handleUpdateAppearance({ wallpaper: 'custom', customBg: dataUrl });
+    } catch (err) {
+      alert(err.message || 'Gagal memasang wallpaper.');
+    }
+  };
+
+  // Kirim GIF dari Picker GIF
+  const handleSendGif = async (gif) => {
+    if (!gif?.url || !currentUser || iBlockedOther || otherBlockedMe) return;
+    setShowStickerDrawer(false);
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .insert({
+          room_id: roomId,
+          sender_id: currentUser.id,
+          content: '',
+          media_url: gif.url,
+          media_type: 'gif',
+          reply_to_id: replyingTo?.id || null,
+          is_view_once: false,
+        })
+        .select(
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
+        )
+        .single();
+      if (error) throw error;
+      setReplyingTo(null);
+      if (data) {
+        setMessages((prev) => (prev.some((m) => m.id === data.id) ? prev : [...prev, data]));
+        scrollToBottom();
+        sendPushNotification({
+          roomId,
+          title: myProfile?.display_name || myProfile?.username || 'Pesan Baru',
+          body: '🎞️ Mengirim GIF',
+          url: `/chat/${roomId}`,
+          tag: `room-${roomId}`,
+        });
+      }
+    } catch (err) {
+      alert('Gagal mengirim GIF: ' + (err.message || 'Terjadi kesalahan'));
+    }
   };
 
   // Muat stiker milik user
@@ -1250,6 +1399,15 @@ function ChatRoomContent() {
             <Search className="w-4 h-4" />
           </button>
           <button
+            onClick={() => setShowAppearanceModal(true)}
+            title="Wallpaper & Warna Chat"
+            className={`p-2 rounded-xl transition ${
+              isDark ? 'hover:bg-zinc-800 text-zinc-200' : 'hover:bg-zinc-100 text-zinc-700'
+            }`}
+          >
+            <Palette className="w-4 h-4" />
+          </button>
+          <button
             onClick={toggleTheme}
             title="Ganti Tema"
             className={`p-2 rounded-xl border transition ${
@@ -1349,7 +1507,7 @@ function ChatRoomContent() {
       )}
 
       {/* Area Pesan */}
-      <main className="flex-1 overflow-y-auto px-3 py-4 space-y-2.5">
+      <main style={getWallpaperStyle(appearance, isDark)} className="flex-1 overflow-y-auto px-3 py-4 space-y-2.5">
         {messages.length === 0 ? (
           <div className="h-full flex items-center justify-center text-center">
             <p
@@ -1399,7 +1557,7 @@ function ChatRoomContent() {
                           ? 'bg-zinc-900 text-zinc-500 italic border border-zinc-800'
                           : 'bg-zinc-200/70 text-zinc-500 italic'
                         : isMine
-                          ? 'bg-blue-600 text-white rounded-br-sm'
+                          ? `${getAccentClass(appearance.accent)} rounded-br-sm`
                           : isDark
                             ? 'bg-zinc-800 text-zinc-100 rounded-bl-sm'
                             : 'bg-white text-zinc-900 border border-zinc-200 rounded-bl-sm'
@@ -1589,6 +1747,18 @@ function ChatRoomContent() {
                           </div>
                         )}
 
+                        {/* GIF Animasi */}
+                        {msg.media_type === 'gif' && msg.media_url && (
+                          <div onClick={(e) => e.stopPropagation()} className="mb-1 overflow-hidden rounded-xl">
+                            <img
+                              src={msg.media_url}
+                              alt="GIF"
+                              loading="lazy"
+                              className="max-h-56 w-auto max-w-full rounded-xl object-contain"
+                            />
+                          </div>
+                        )}
+
                         {/* Berbagi Lokasi GPS */}
                         {msg.media_type === 'location' && msg.location_lat != null && msg.location_lng != null && (
                           <a
@@ -1768,6 +1938,9 @@ function ChatRoomContent() {
                             : 'text-zinc-400'
                       }`}
                     >
+                      {starredIds.has(msg.id) && !msg.is_deleted && (
+                        <Star className="w-3 h-3 text-amber-300 fill-current shrink-0" />
+                      )}
                       {msg.edited_at && !msg.is_deleted && <span className="italic">diedit</span>}
                       <span>
                         {new Date(msg.created_at).toLocaleTimeString('id-ID', {
@@ -1779,11 +1952,11 @@ function ChatRoomContent() {
                         !msg.is_deleted &&
                         (isRead ? (
                           <span title="Sudah dibaca" className="inline-flex items-center text-emerald-300">
-                            <Check className="w-3.5 h-3.5" />
+                            <CheckCheck className="w-3.5 h-3.5" />
                           </span>
                         ) : (
-                          <span title="Belum dibaca" className="inline-flex items-center text-blue-200/80">
-                            <CheckCheck className="w-3.5 h-3.5" />
+                          <span title="Terkirim" className="inline-flex items-center text-blue-200/80">
+                            <Check className="w-3.5 h-3.5" />
                           </span>
                         ))}
                     </div>
@@ -1997,21 +2170,53 @@ function ChatRoomContent() {
         </div>
       )}
 
-      {/* Laci Stiker Kustom di Bagian Bawah Chat */}
+      {/* Laci Stiker & GIF di Bagian Bawah Chat */}
       {showStickerDrawer && !isBlocked && (
         <div
-          className={`px-3 py-3 border-t shrink-0 ${
+          className={`px-3 py-3 border-t shrink-0 space-y-2.5 ${
             isDark ? 'bg-[#121215] border-zinc-800' : 'bg-white border-zinc-200'
           }`}
         >
-          <StickerStudio
-            userId={currentUser?.id}
-            isDark={isDark}
-            stickers={myStickers}
-            onStickersChange={setMyStickers}
-            onSelectSticker={handleSendSticker}
-            compact
-          />
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setDrawerTab('sticker')}
+              className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
+                drawerTab === 'sticker'
+                  ? 'bg-blue-600 text-white'
+                  : isDark
+                    ? 'bg-zinc-800 text-zinc-300'
+                    : 'bg-zinc-100 text-zinc-700'
+              }`}
+            >
+              Stiker
+            </button>
+            <button
+              type="button"
+              onClick={() => setDrawerTab('gif')}
+              className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
+                drawerTab === 'gif'
+                  ? 'bg-blue-600 text-white'
+                  : isDark
+                    ? 'bg-zinc-800 text-zinc-300'
+                    : 'bg-zinc-100 text-zinc-700'
+              }`}
+            >
+              GIF
+            </button>
+          </div>
+          {drawerTab === 'sticker' ? (
+            <StickerStudio
+              userId={currentUser?.id}
+              isDark={isDark}
+              stickers={myStickers}
+              onStickersChange={setMyStickers}
+              onSelectSticker={handleSendSticker}
+              compact
+            />
+          ) : (
+            <GifPicker isDark={isDark} onSelectGif={handleSendGif} />
+          )}
         </div>
       )}
 
@@ -2081,7 +2286,7 @@ function ChatRoomContent() {
           <input
             ref={albumAddInputRef}
             type="file"
-            accept="image/*"
+            accept={ANDROID_IMAGE_ACCEPT}
             multiple
             onChange={handleAddAlbumPhotos}
             className="hidden"
@@ -2204,6 +2409,20 @@ function ChatRoomContent() {
                   {emoji}
                 </button>
               ))}
+                <button
+                  type="button"
+                  onClick={() => setShowMoreEmojis((v) => !v)}
+                  title="Emoji lainnya"
+                  className={`w-9 h-9 rounded-full flex items-center justify-center transition ${
+                    showMoreEmojis
+                      ? 'bg-blue-600 text-white'
+                      : isDark
+                        ? 'bg-zinc-800 text-zinc-200'
+                        : 'bg-zinc-100 text-zinc-700'
+                  }`}
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
             </div>
 
             <div className={`border-t pt-2 space-y-1 ${isDark ? 'border-zinc-800' : 'border-zinc-200'}`}>
@@ -2219,6 +2438,74 @@ function ChatRoomContent() {
               >
                 <Reply className="w-4 h-4 text-blue-600" /> Balas Pesan
               </button>
+
+              {showMoreEmojis && !selectedMsg.is_deleted && (
+                <div
+                  className={`p-2.5 rounded-xl border space-y-2 ${
+                    isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
+                  }`}
+                >
+                  <div className="grid grid-cols-8 gap-1 max-h-32 overflow-y-auto">
+                    {MORE_EMOJIS.map((em) => (
+                      <button
+                        key={em}
+                        type="button"
+                        onClick={() => {
+                          setShowMoreEmojis(false);
+                          handleToggleReaction(selectedMsg.id, em);
+                        }}
+                        className="text-xl py-1 rounded-lg hover:bg-blue-500/20"
+                      >
+                        {em}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={customEmojiInput}
+                      onChange={(e) => setCustomEmojiInput(e.target.value)}
+                      placeholder="Ketik emoji bebas dari keyboard..."
+                      className={`flex-1 px-2.5 py-1.5 rounded-lg text-xs border focus:outline-none ${
+                        isDark
+                          ? 'bg-zinc-950 border-zinc-700 text-white'
+                          : 'bg-white border-zinc-300 text-zinc-900'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const em = customEmojiInput.trim().slice(0, 8);
+                        if (!em) return;
+                        setCustomEmojiInput('');
+                        setShowMoreEmojis(false);
+                        handleToggleReaction(selectedMsg.id, em);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold"
+                    >
+                      Pakai
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!selectedMsg.is_deleted && (
+                <button
+                  onClick={() => handleToggleStarMessage(selectedMsg)}
+                  className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-3 text-sm font-medium ${
+                    isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'
+                  }`}
+                >
+                  <Star
+                    className={`w-4 h-4 ${
+                      starredIds.has(selectedMsg.id)
+                        ? 'text-amber-500 fill-current'
+                        : 'text-amber-500'
+                    }`}
+                  />
+                  {starredIds.has(selectedMsg.id) ? 'Hapus Bintang' : 'Bintangi Pesan'}
+                </button>
+              )}
 
               {!selectedMsg.is_deleted && (
                 <button
@@ -2352,6 +2639,96 @@ function ChatRoomContent() {
           canSave={zoomViewer.canSave !== false}
           onClose={() => setZoomViewer(null)}
         />
+      )}
+
+      {/* Modal Wallpaper & Warna Aksen Chat */}
+      {showAppearanceModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={() => setShowAppearanceModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full sm:max-w-sm rounded-t-3xl sm:rounded-2xl p-5 shadow-xl space-y-4 ${
+              isDark ? 'bg-[#121215] text-zinc-100 border border-zinc-800' : 'bg-white text-zinc-900'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="font-bold text-sm flex items-center gap-2">
+                <Palette className="w-4 h-4 text-blue-600" /> Wallpaper & Warna Chat
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowAppearanceModal(false)}
+                className={`p-1.5 rounded-lg ${isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'}`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div>
+              <p className="text-xs font-semibold mb-2 text-zinc-400">Warna Aksen Pesan</p>
+              <div className="grid grid-cols-6 gap-2">
+                {CHAT_ACCENTS.map((acc) => (
+                  <button
+                    key={acc.id}
+                    type="button"
+                    onClick={() => handleUpdateAppearance({ accent: acc.id })}
+                    title={acc.name}
+                    style={{ backgroundColor: acc.swatch }}
+                    className={`h-9 rounded-xl transition ${
+                      appearance.accent === acc.id
+                        ? 'ring-2 ring-offset-2 ring-blue-500 scale-105'
+                        : 'opacity-80 hover:opacity-100'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-semibold mb-2 text-zinc-400">Wallpaper Obrolan</p>
+              <div className="grid grid-cols-3 gap-2">
+                {CHAT_WALLPAPERS.map((wp) => (
+                  <button
+                    key={wp.id}
+                    type="button"
+                    onClick={() => handleUpdateAppearance({ wallpaper: wp.id })}
+                    className={`px-2.5 py-2.5 rounded-xl text-xs font-semibold border transition ${
+                      appearance.wallpaper === wp.id
+                        ? 'border-blue-500 bg-blue-600/15 text-blue-500'
+                        : isDark
+                          ? 'border-zinc-800 bg-zinc-900 text-zinc-300'
+                          : 'border-zinc-200 bg-zinc-50 text-zinc-700'
+                    }`}
+                  >
+                    {wp.name}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => wallpaperInputRef.current?.click()}
+                  className={`px-2.5 py-2.5 rounded-xl text-xs font-semibold border transition ${
+                    appearance.wallpaper === 'custom'
+                      ? 'border-blue-500 bg-blue-600/15 text-blue-500'
+                      : isDark
+                        ? 'border-zinc-800 bg-zinc-900 text-zinc-300'
+                        : 'border-zinc-200 bg-zinc-50 text-zinc-700'
+                  }`}
+                >
+                  Foto HP
+                </button>
+              </div>
+              <input
+                ref={wallpaperInputRef}
+                type="file"
+                accept={ANDROID_IMAGE_ACCEPT}
+                onChange={handlePickCustomWallpaper}
+                className="hidden"
+              />
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal Fullscreen Perbesar Video */}

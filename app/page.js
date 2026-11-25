@@ -29,7 +29,8 @@ import {
   PhoneIncoming,
   PhoneOutgoing,
   PhoneMissed,
-  Smile,
+  Star,
+  X,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/useTheme';
@@ -41,7 +42,7 @@ import {
 } from '../lib/pushClient';
 import Avatar from '../components/Avatar';
 import ZoomableLightbox from '../components/ZoomableLightbox';
-import StickerStudio from '../components/StickerStudio';
+import { ANDROID_IMAGE_ACCEPT } from '../lib/security';
 
 const compressImageToDataUrl = (file) =>
   new Promise((resolve, reject) => {
@@ -51,7 +52,7 @@ const compressImageToDataUrl = (file) =>
       const img = new Image();
       img.onerror = () => reject(new Error('File bukan gambar yang valid.'));
       img.onload = () => {
-        const size = 256;
+        const size = 640;
         const canvas = document.createElement('canvas');
         canvas.width = size;
         canvas.height = size;
@@ -60,7 +61,7 @@ const compressImageToDataUrl = (file) =>
         const sx = (img.width - minSide) / 2;
         const sy = (img.height - minSide) / 2;
         ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
-        resolve(canvas.toDataURL('image/jpeg', 0.78));
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
       };
       img.src = event.target.result;
     };
@@ -78,6 +79,7 @@ const formatPreviewText = (msg) => {
   if (msg.media_type === 'video') return msg.content ? `🎬 ${msg.content}` : '🎬 Video';
   if (msg.media_type === 'file') return msg.file_name ? `📄 ${msg.file_name}` : '📄 Dokumen';
   if (msg.media_type === 'sticker') return '🎨 Stiker';
+  if (msg.media_type === 'gif') return '🎞️ GIF';
   if (msg.media_type === 'album') return msg.content ? `🖼️ ${msg.content}` : '🖼️ Album Foto';
   if (msg.media_type === 'location') return '📍 Lokasi';
   return msg.content || '';
@@ -104,7 +106,10 @@ export default function HomePage() {
   const [showArchived, setShowArchived] = useState(false);
   const [roomMenuTarget, setRoomMenuTarget] = useState(null);
   const [zoomAvatar, setZoomAvatar] = useState(null);
-  const [stickers, setStickers] = useState([]);
+  const [starredList, setStarredList] = useState([]);
+  const [showStarredModal, setShowStarredModal] = useState(false);
+  const [loadingStarred, setLoadingStarred] = useState(false);
+  const [draftMap, setDraftMap] = useState({});
   const [callLogs, setCallLogs] = useState([]);
   const [loadingCalls, setLoadingCalls] = useState(false);
   const [pwaReady, setPwaReady] = useState(false);
@@ -288,13 +293,52 @@ export default function HomePage() {
     if (error && user?.id) loadRooms(user.id);
   };
 
-  const loadStickers = useCallback(async (userId) => {
-    const { data } = await supabase
-      .from('stickers')
-      .select('id, user_id, image_url, label, created_at')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-    setStickers(data || []);
+  const loadDrafts = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const map = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('rzchat_draft_')) {
+          const val = (localStorage.getItem(k) || '').trim();
+          if (val) map[k.replace('rzchat_draft_', '')] = val;
+        }
+      }
+    } catch {}
+    setDraftMap(map);
+  }, []);
+
+  const loadStarredMessages = useCallback(async (userId) => {
+    if (!userId) return;
+    setLoadingStarred(true);
+    try {
+      const { data: stars } = await supabase
+        .from('starred_messages')
+        .select('id, message_id, room_id, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(60);
+      if (!stars || stars.length === 0) {
+        setStarredList([]);
+        return;
+      }
+      const msgIds = stars.map((s) => s.message_id);
+      const { data: msgs } = await supabase
+        .from('messages')
+        .select('id, room_id, sender_id, content, created_at, media_type, file_name, is_deleted')
+        .in('id', msgIds);
+      const mMap = {};
+      (msgs || []).forEach((m) => {
+        mMap[m.id] = m;
+      });
+      setStarredList(
+        stars
+          .map((s) => ({ ...s, message: mMap[s.message_id] || null }))
+          .filter((x) => x.message && !x.message.is_deleted)
+      );
+    } finally {
+      setLoadingStarred(false);
+    }
   }, []);
 
   const loadCallLogs = useCallback(async (userId) => {
@@ -361,12 +405,17 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!user?.id) return;
-    loadStickers(user.id);
+    loadDrafts();
     loadCallLogs(user.id);
     const onLogUpdate = () => loadCallLogs(user.id);
+    const onFocus = () => loadDrafts();
     window.addEventListener('rzchat-call-log-updated', onLogUpdate);
-    return () => window.removeEventListener('rzchat-call-log-updated', onLogUpdate);
-  }, [user?.id, loadStickers, loadCallLogs]);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('rzchat-call-log-updated', onLogUpdate);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [user?.id, loadDrafts, loadCallLogs]);
 
   const handleSmartPwaInstall = async () => {
     if (isPwaInstalled) {
@@ -1027,18 +1076,27 @@ export default function HomePage() {
                                   : 'text-zinc-500'
                             }`}
                           >
-                            {isLastMine &&
-                              !item.lastMessage?.is_deleted &&
-                              (item.lastMessage.read_at ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                              ) : (
-                                <CheckCheck className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                              ))}
-                            <span className="truncate">
-                              {item.lastMessage
-                                ? formatPreviewText(item.lastMessage)
-                                : `@${item.otherUser.username}`}
-                            </span>
+                            {draftMap[String(item.roomId)] ? (
+                              <span className="truncate">
+                                <span className="text-red-500 font-semibold">Draft: </span>
+                                {draftMap[String(item.roomId)]}
+                              </span>
+                            ) : (
+                              <>
+                                {isLastMine &&
+                                  !item.lastMessage?.is_deleted &&
+                                  (item.lastMessage.read_at ? (
+                                    <CheckCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                  ) : (
+                                    <Check className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                                  ))}
+                                <span className="truncate">
+                                  {item.lastMessage
+                                    ? formatPreviewText(item.lastMessage)
+                                    : `@${item.otherUser.username}`}
+                                </span>
+                              </>
+                            )}
                           </div>
 
                           {hasUnread && (
@@ -1174,18 +1232,6 @@ export default function HomePage() {
             </div>
           )}
         </main>
-      ) : activeTab === 'stickers' ? (
-        /* TAB STIKER KUSTOM */
-        <main className="flex-1 overflow-y-auto px-4 py-5">
-          <div className="max-w-lg mx-auto pb-8">
-            <StickerStudio
-              userId={user?.id}
-              isDark={isDark}
-              stickers={stickers}
-              onStickersChange={setStickers}
-            />
-          </div>
-        </main>
       ) : (
         /* TAB AKUN, NOTIFIKASI PUSH & BLOKIR */
         <main className="flex-1 overflow-y-auto px-4 py-5">
@@ -1221,7 +1267,7 @@ export default function HomePage() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*"
+                  accept={ANDROID_IMAGE_ACCEPT}
                   onChange={handlePhotoSelect}
                   className="hidden"
                 />
@@ -1405,6 +1451,35 @@ export default function HomePage() {
               </button>
             </div>
 
+            {/* Pesan Berbintang */}
+            <div
+              className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
+                isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
+              }`}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/15 text-amber-500 flex items-center justify-center shrink-0">
+                  <Star className="w-4 h-4 fill-current" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold">Pesan Berbintang</p>
+                  <p className={`text-[11px] truncate ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                    Lihat semua pesan penting yang kamu simpan
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowStarredModal(true);
+                  if (user?.id) loadStarredMessages(user.id);
+                }}
+                className="px-3 py-1.5 rounded-xl bg-amber-500 text-white text-xs font-semibold shrink-0"
+              >
+                Buka
+              </button>
+            </div>
+
             {/* Daftar Pengguna Diblokir */}
             <div
               className={`p-4 rounded-2xl border ${
@@ -1457,14 +1532,87 @@ export default function HomePage() {
         />
       )}
 
-      {/* Bottom Nav (4 Tab: Chat, Panggilan, Stiker, Akun) */}
+      {showStarredModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={() => setShowStarredModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl p-5 shadow-xl max-h-[80vh] flex flex-col ${
+              isDark ? 'bg-[#121215] text-zinc-100 border border-zinc-800' : 'bg-white text-zinc-900'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-bold text-sm flex items-center gap-2">
+                <Star className="w-4 h-4 text-amber-500 fill-current" /> Pesan Berbintang
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowStarredModal(false)}
+                className={`p-1.5 rounded-lg ${isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'}`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {loadingStarred ? (
+                <div className="py-10 flex justify-center">
+                  <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+                </div>
+              ) : starredList.length === 0 ? (
+                <p className="py-10 text-center text-xs text-zinc-500">
+                  Belum ada pesan berbintang. Ketuk pesan di dalam chat lalu pilih "Bintangi Pesan".
+                </p>
+              ) : (
+                starredList.map((item) => {
+                  const roomObj = rooms.find((r) => String(r.roomId) === String(item.room_id));
+                  const peerName =
+                    roomObj?.otherUser?.display_name || roomObj?.otherUser?.username || 'Obrolan';
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setShowStarredModal(false);
+                        router.push(`/chat/${item.room_id}`);
+                      }}
+                      className={`w-full p-3 rounded-xl border text-left transition ${
+                        isDark
+                          ? 'bg-zinc-900 border-zinc-800 hover:border-blue-500'
+                          : 'bg-zinc-50 border-zinc-200 hover:border-blue-500'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-[11px] font-bold text-blue-500 truncate">{peerName}</span>
+                        <span className="text-[10px] text-zinc-400 shrink-0">
+                          {new Date(item.message.created_at).toLocaleDateString('id-ID', {
+                            day: 'numeric',
+                            month: 'short',
+                          })}
+                        </span>
+                      </div>
+                      <p className="text-xs line-clamp-2">{formatPreviewText(item.message)}</p>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bottom Nav (3 Tab: Chat, Panggilan, Akun) */}
       <nav
-        className={`grid grid-cols-4 border-t shrink-0 ${
+        className={`grid grid-cols-3 border-t shrink-0 ${
           isDark ? 'bg-[#09090B] border-zinc-800' : 'bg-white border-zinc-200'
         }`}
       >
         <button
-          onClick={() => setActiveTab('chat')}
+          onClick={() => {
+            setActiveTab('chat');
+            loadDrafts();
+          }}
           className={`py-2.5 flex flex-col items-center justify-center gap-1 transition ${
             activeTab === 'chat'
               ? 'text-blue-600'
@@ -1499,23 +1647,6 @@ export default function HomePage() {
         >
           <Phone className="w-5 h-5" />
           <span className="text-[11px] font-semibold">Panggilan</span>
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveTab('stickers');
-            if (user?.id) loadStickers(user.id);
-          }}
-          className={`py-2.5 flex flex-col items-center justify-center gap-1 transition ${
-            activeTab === 'stickers'
-              ? 'text-blue-600'
-              : isDark
-                ? 'text-zinc-400'
-                : 'text-zinc-500'
-          }`}
-        >
-          <Smile className="w-5 h-5" />
-          <span className="text-[11px] font-semibold">Stiker</span>
         </button>
 
         <button
