@@ -41,6 +41,9 @@ import {
   unsubscribeUserFromPush,
 } from '../lib/pushClient';
 import Avatar from '../components/Avatar';
+import GroupCreateModal from '../components/GroupCreateModal';
+import StatusSection from '../components/StatusSection';
+import { Users, CircleDot, Star as FavStar } from 'lucide-react';
 import ZoomableLightbox from '../components/ZoomableLightbox';
 import { ANDROID_IMAGE_ACCEPT } from '../lib/security';
 
@@ -83,6 +86,7 @@ const formatPreviewText = (msg) => {
   if (msg.media_type === 'album') return msg.content ? `🖼️ ${msg.content}` : '🖼️ Album Foto';
   if (msg.media_type === 'location') return '📍 Lokasi';
   if (msg.media_type === 'live_location') return '🟢 Lokasi Live';
+  if (msg.media_type === 'poll') return msg.content ? `📊 ${msg.content}` : '📊 Polling';
   return msg.content || '';
 };
 
@@ -106,6 +110,9 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [roomMenuTarget, setRoomMenuTarget] = useState(null);
+  const [chatFilter, setChatFilter] = useState('all');
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const [hasUnseenStatus, setHasUnseenStatus] = useState(false);
   const [zoomAvatar, setZoomAvatar] = useState(null);
   const [starredList, setStarredList] = useState([]);
   const [showStarredModal, setShowStarredModal] = useState(false);
@@ -162,7 +169,7 @@ export default function HomePage() {
   const loadRooms = useCallback(async (userId) => {
     const { data: myMembers } = await supabase
       .from('room_members')
-      .select('room_id, is_pinned, is_archived, pinned_at')
+      .select('room_id, is_pinned, is_archived, pinned_at, role, is_favorite, last_read_at')
       .eq('user_id', userId);
 
     if (!myMembers || myMembers.length === 0) {
@@ -172,13 +179,21 @@ export default function HomePage() {
 
     const roomIds = myMembers.map((m) => m.room_id);
 
-    const { data: otherMembers } = await supabase
-      .from('room_members')
-      .select('room_id, user_id')
-      .in('room_id', roomIds)
-      .neq('user_id', userId);
+    const [{ data: roomMetaRows }, { data: allMembers }] = await Promise.all([
+      supabase
+        .from('rooms')
+        .select('id, is_group, name, description, avatar_url, created_by')
+        .in('id', roomIds),
+      supabase.from('room_members').select('room_id, user_id').in('room_id', roomIds),
+    ]);
 
-    const otherUserIds = [...new Set((otherMembers || []).map((m) => m.user_id))];
+    const roomMetaMap = {};
+    (roomMetaRows || []).forEach((r) => {
+      roomMetaMap[r.id] = r;
+    });
+
+    const otherMembers = (allMembers || []).filter((m) => m.user_id !== userId);
+    const otherUserIds = [...new Set(otherMembers.map((m) => m.user_id))];
 
     const { data: otherProfiles } =
       otherUserIds.length > 0
@@ -198,7 +213,7 @@ export default function HomePage() {
       .select('id, room_id, content, created_at, sender_id, read_at, media_type, is_deleted, is_view_once, file_name')
       .in('room_id', roomIds)
       .order('created_at', { ascending: false })
-      .limit(300);
+      .limit(350);
 
     const lastMsgMap = {};
     (recentMsgs || []).forEach((msg) => {
@@ -207,38 +222,60 @@ export default function HomePage() {
       }
     });
 
-    const { data: unreadRows } = await supabase
-      .from('messages')
-      .select('room_id')
-      .in('room_id', roomIds)
-      .neq('sender_id', userId)
-      .is('read_at', null);
-
-    const unreadMap = {};
-    (unreadRows || []).forEach((row) => {
-      unreadMap[row.room_id] = (unreadMap[row.room_id] || 0) + 1;
-    });
-
     const myPrefMap = {};
     (myMembers || []).forEach((m) => {
       myPrefMap[m.room_id] = {
         isPinned: Boolean(m.is_pinned),
         isArchived: Boolean(m.is_archived),
+        isFavorite: Boolean(m.is_favorite),
         pinnedAt: m.pinned_at || null,
+        lastReadMs: m.last_read_at ? new Date(m.last_read_at).getTime() : 0,
       };
     });
 
+    // Hitung pesan belum dibaca secara akurat (fix bug badge nyangkut setelah dibuka)
+    const unreadMap = {};
+    (recentMsgs || []).forEach((msg) => {
+      if (msg.sender_id === userId) return;
+      const pref = myPrefMap[msg.room_id];
+      const msgMs = new Date(msg.created_at).getTime();
+      if (msg.read_at) return;
+      if (pref && pref.lastReadMs > 0 && msgMs <= pref.lastReadMs) return;
+      unreadMap[msg.room_id] = (unreadMap[msg.room_id] || 0) + 1;
+    });
+
     const roomList = roomIds.map((rId) => {
-      const member = (otherMembers || []).find((m) => m.room_id === rId);
-      const otherUser = member ? profileMap[member.user_id] : null;
-      const pref = myPrefMap[rId] || { isPinned: false, isArchived: false, pinnedAt: null };
+      const meta = roomMetaMap[rId];
+      const isGroup = Boolean(meta?.is_group);
+      const member = otherMembers.find((m) => m.room_id === rId);
+      const otherUser = isGroup
+        ? {
+            id: rId,
+            username: 'grup',
+            display_name: meta?.name || 'Grup',
+            avatar_url: meta?.avatar_url || '',
+          }
+        : (member ? profileMap[member.user_id] : null) || {
+            id: '',
+            username: 'pengguna',
+            display_name: 'Pengguna',
+            avatar_url: '',
+          };
+      const pref = myPrefMap[rId] || {
+        isPinned: false,
+        isArchived: false,
+        isFavorite: false,
+        pinnedAt: null,
+      };
       return {
         roomId: rId,
-        otherUser: otherUser || { id: '', username: 'pengguna', display_name: 'Pengguna', avatar_url: '' },
+        isGroup,
+        otherUser,
         lastMessage: lastMsgMap[rId] || null,
         unreadCount: unreadMap[rId] || 0,
         isPinned: pref.isPinned,
         isArchived: pref.isArchived,
+        isFavorite: pref.isFavorite,
         pinnedAt: pref.pinnedAt,
       };
     });
@@ -510,10 +547,31 @@ export default function HomePage() {
 
     init();
 
-    return () => {
-      if (channel) supabase.removeChannel(channel);
+      const onReSync = () => {
+        if (document.visibilityState === 'visible') {
+          loadRooms(authUser.id);
+          loadDrafts();
+        }
+      };
+      window.addEventListener('pageshow', onReSync);
+      document.addEventListener('visibilitychange', onReSync);
+
+      return () => {
+        window.removeEventListener('pageshow', onReSync);
+        document.removeEventListener('visibilitychange', onReSync);
+        if (channel) supabase.removeChannel(channel);
+      };
     };
-  }, [router, loadRooms, loadBlockedUsers]);
+
+    let cleanupFn;
+    init().then((fn) => {
+      cleanupFn = fn;
+    });
+
+    return () => {
+      if (typeof cleanupFn === 'function') cleanupFn();
+    };
+  }, [router, loadRooms, loadBlockedUsers, loadDrafts]);
 
   useEffect(() => {
     const q = searchQuery.trim().replace(/^@+/, '').toLowerCase();
@@ -785,20 +843,56 @@ export default function HomePage() {
       {/* Konten Utama */}
       {activeTab === 'chat' ? (
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className={`p-3 border-b shrink-0 ${isDark ? 'border-zinc-800' : 'border-zinc-200'}`}>
-            <div className="relative">
-              <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-3" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Cari @username teman..."
-                className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-sm border focus:outline-none ${
-                  isDark
-                    ? 'bg-zinc-900 border-zinc-700 text-white placeholder-zinc-400 focus:border-blue-500'
-                    : 'bg-zinc-100 border-zinc-200 text-zinc-900 placeholder-zinc-500 focus:border-blue-600 focus:bg-white'
-                }`}
-              />
+          <div className={`p-3 border-b shrink-0 space-y-2.5 ${isDark ? 'border-zinc-800' : 'border-zinc-200'}`}>
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-3" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Cari @username teman..."
+                  className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-sm border focus:outline-none ${
+                    isDark
+                      ? 'bg-zinc-900 border-zinc-700 text-white placeholder-zinc-400 focus:border-blue-500'
+                      : 'bg-zinc-100 border-zinc-200 text-zinc-900 placeholder-zinc-500 focus:border-blue-600 focus:bg-white'
+                  }`}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateGroup(true)}
+                title="Buat Grup Baru"
+                className="px-3 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-1.5 shrink-0"
+              >
+                <Users className="w-4 h-4" />
+                <span>Grup</span>
+              </button>
+            </div>
+
+            {/* Filter Cepat Halaman Utama */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+              {[
+                { id: 'all', label: 'Semua' },
+                { id: 'unread', label: 'Belum Dibaca' },
+                { id: 'groups', label: 'Grup' },
+                { id: 'favorites', label: 'Favorit' },
+              ].map((flt) => (
+                <button
+                  key={flt.id}
+                  type="button"
+                  onClick={() => setChatFilter(flt.id)}
+                  className={`px-3 py-1 rounded-full text-xs font-semibold shrink-0 transition ${
+                    chatFilter === flt.id
+                      ? 'bg-blue-600 text-white'
+                      : isDark
+                        ? 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800'
+                        : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+                  }`}
+                >
+                  {flt.label}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -945,6 +1039,24 @@ export default function HomePage() {
                   )}
                   <button
                     type="button"
+                    onClick={async () => {
+                      const target = roomMenuTarget;
+                      setRoomMenuTarget(null);
+                      await supabase.rpc('set_room_favorite', {
+                        p_room_id: String(target.roomId),
+                        p_is_favorite: !target.isFavorite,
+                      });
+                      if (user?.id) loadRooms(user.id);
+                    }}
+                    className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-3 text-sm font-medium ${
+                      isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'
+                    }`}
+                  >
+                    <FavStar className="w-4 h-4 text-amber-500" />
+                    {roomMenuTarget.isFavorite ? 'Hapus dari Favorit' : 'Tambahkan ke Favorit'}
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => handleToggleArchiveRoom(roomMenuTarget)}
                     className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-3 text-sm font-medium ${
                       isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'
@@ -982,7 +1094,12 @@ export default function HomePage() {
                     {showArchived ? 'Tidak ada obrolan diarsipkan.' : 'Semua obrolan sedang diarsipkan.'}
                   </div>
                 )}
-                {visibleRooms.map((item) => {
+                {visibleRooms.filter((item) => {
+                    if (chatFilter === 'unread') return item.unreadCount > 0;
+                    if (chatFilter === 'groups') return item.isGroup;
+                    if (chatFilter === 'favorites') return item.isFavorite;
+                    return true;
+                  }).map((item) => {
                   const isLastMine = item.lastMessage?.sender_id === user?.id;
                   const hasUnread = item.unreadCount > 0;
                   const isOnline = Boolean(item.otherUser?.id && onlineUsers.has(item.otherUser.id));
@@ -1233,6 +1350,13 @@ export default function HomePage() {
             </div>
           )}
         </main>
+      ) : activeTab === 'status' ? (
+        <StatusSection
+          currentUser={user}
+          profile={profile}
+          isDark={isDark}
+          onUnseenChange={setHasUnseenStatus}
+        />
       ) : (
         /* TAB AKUN, NOTIFIKASI PUSH & BLOKIR */
         <main className="flex-1 overflow-y-auto px-4 py-5">
@@ -1603,9 +1727,21 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Bottom Nav (3 Tab: Chat, Panggilan, Akun) */}
+      {showCreateGroup && (
+        <GroupCreateModal
+          currentUser={user}
+          isDark={isDark}
+          onClose={() => setShowCreateGroup(false)}
+          onCreated={(newRoomId) => {
+            setShowCreateGroup(false);
+            router.push(`/chat/${newRoomId}`);
+          }}
+        />
+      )}
+
+      {/* Bottom Nav (4 Tab: Chat, Status, Panggilan, Akun) */}
       <nav
-        className={`grid grid-cols-3 border-t shrink-0 ${
+        className={`grid grid-cols-4 border-t shrink-0 ${
           isDark ? 'bg-[#09090B] border-zinc-800' : 'bg-white border-zinc-200'
         }`}
       >
@@ -1631,6 +1767,25 @@ export default function HomePage() {
             )}
           </div>
           <span className="text-[11px] font-semibold">Chat</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('status')}
+          className={`py-2.5 flex flex-col items-center justify-center gap-1 transition ${
+            activeTab === 'status'
+              ? 'text-blue-600'
+              : isDark
+                ? 'text-zinc-400'
+                : 'text-zinc-500'
+          }`}
+        >
+          <div className="relative">
+            <CircleDot className="w-5 h-5" />
+            {hasUnseenStatus && (
+              <span className="absolute -top-0.5 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-black" />
+            )}
+          </div>
+          <span className="text-[11px] font-semibold">Status</span>
         </button>
 
         <button

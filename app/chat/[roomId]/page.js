@@ -53,6 +53,12 @@ import ZoomableLightbox from '../../../components/ZoomableLightbox';
 import VideoLightbox from '../../../components/VideoLightbox';
 import StickerStudio from '../../../components/StickerStudio';
 import GifPicker from '../../../components/GifPicker';
+import GroupInfoModal from '../../../components/GroupInfoModal';
+import PollCard from '../../../components/PollCard';
+import PollCreateModal from '../../../components/PollCreateModal';
+import MessageInfoModal from '../../../components/MessageInfoModal';
+import VoiceNoteRecorder from '../../../components/VoiceNoteRecorder';
+import { BarChart3, Info } from 'lucide-react';
 import {
   CHAT_ACCENTS,
   CHAT_WALLPAPERS,
@@ -124,6 +130,7 @@ const snippetOf = (msg) => {
   if (msg.media_type === 'album') return msg.content ? `🖼️ ${msg.content}` : '🖼️ Album Foto';
   if (msg.media_type === 'location') return '📍 Lokasi';
   if (msg.media_type === 'live_location') return '🟢 Lokasi Live';
+  if (msg.media_type === 'poll') return msg.content ? `📊 ${msg.content}` : '📊 Polling';
   return msg.content || '';
 };
 
@@ -155,6 +162,16 @@ function ChatRoomContent() {
   const [replyingTo, setReplyingTo] = useState(null);
   const [editingMsg, setEditingMsg] = useState(null);
   const [selectedMsg, setSelectedMsg] = useState(null);
+  const [roomMeta, setRoomMeta] = useState(null);
+  const [groupMembers, setGroupMembers] = useState([]);
+  const [myRole, setMyRole] = useState('member');
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [showPollModal, setShowPollModal] = useState(false);
+  const [pollsMap, setPollsMap] = useState({});
+  const [pollVotesMap, setPollVotesMap] = useState({});
+  const [infoModalMsg, setInfoModalMsg] = useState(null);
+  const [mentionQuery, setMentionQuery] = useState(null);
+  const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [searchIdx, setSearchIdx] = useState(0);
@@ -215,7 +232,7 @@ function ChatRoomContent() {
 
   const markAsRead = useCallback(async () => {
     if (!roomId) return;
-    await supabase.rpc('mark_room_messages_read', { p_room_id: roomId });
+    await supabase.rpc('mark_room_messages_read', { p_room_id: String(roomId) });
   }, [roomId]);
 
   const refreshBlockStatus = useCallback(async (myId, otherId) => {
@@ -289,7 +306,7 @@ function ChatRoomContent() {
       const { data: initialMsgs } = await supabase
         .from('messages')
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
         )
         .eq('room_id', roomId)
         .order('created_at', { ascending: true });
@@ -570,7 +587,7 @@ function ChatRoomContent() {
           media_urls: uploadedUrls,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
         )
         .single();
 
@@ -815,7 +832,7 @@ function ChatRoomContent() {
           is_view_once: false,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
         )
         .single();
       if (error) throw error;
@@ -864,7 +881,7 @@ function ChatRoomContent() {
           is_view_once: false,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
         )
         .single();
       if (error) throw error;
@@ -1025,7 +1042,7 @@ function ChatRoomContent() {
               is_view_once: false,
             })
             .select(
-              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
+              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
             )
             .single();
           if (error) throw error;
@@ -1056,6 +1073,184 @@ function ChatRoomContent() {
       },
       { enableHighAccuracy: true, timeout: 15000 }
     );
+  };
+
+  const isGroupLockedForMe = Boolean(
+    roomMeta?.is_group &&
+      roomMeta?.only_admins_can_send &&
+      myRole !== 'admin' &&
+      roomMeta?.created_by !== currentUser?.id
+  );
+
+  const refreshRoomAndMembers = useCallback(async (uid) => {
+    const activeUid = uid || currentUser?.id;
+    if (!roomId || !activeUid) return;
+    const [{ data: rMeta }, { data: mRows }] = await Promise.all([
+      supabase
+        .from('rooms')
+        .select('id, is_group, name, description, avatar_url, created_by, invite_code, only_admins_can_send')
+        .eq('id', roomId)
+        .maybeSingle(),
+      supabase.from('room_members').select('user_id, role').eq('room_id', roomId),
+    ]);
+    if (rMeta) setRoomMeta(rMeta);
+    const list = mRows || [];
+    const meRow = list.find((m) => m.user_id === activeUid);
+    if (meRow) setMyRole(meRow.role || 'member');
+
+    const ids = list.map((m) => m.user_id);
+    if (ids.length > 0) {
+      const { data: profs } = await supabase
+        .from('profiles')
+        .select('id, username, display_name, avatar_url, status_text, last_seen')
+        .in('id', ids);
+      const pMap = {};
+      (profs || []).forEach((p) => {
+        pMap[p.id] = p;
+      });
+      setGroupMembers(list.map((m) => ({ ...m, profile: pMap[m.user_id] || {} })));
+    }
+  }, [roomId, currentUser?.id]);
+
+  const refreshPolls = useCallback(async () => {
+    if (!roomId) return;
+    const { data: pRows } = await supabase
+      .from('polls')
+      .select('id, room_id, created_by, question, options, allow_multiple, is_closed, created_at')
+      .eq('room_id', String(roomId));
+    const list = pRows || [];
+    const pMap = {};
+    list.forEach((p) => {
+      pMap[p.id] = p;
+    });
+    setPollsMap(pMap);
+
+    if (list.length > 0) {
+      const { data: vRows } = await supabase
+        .from('poll_votes')
+        .select('id, poll_id, user_id, option_index')
+        .in(
+          'poll_id',
+          list.map((p) => p.id)
+        );
+      const vMap = {};
+      (vRows || []).forEach((v) => {
+        if (!vMap[v.poll_id]) vMap[v.poll_id] = [];
+        vMap[v.poll_id].push(v);
+      });
+      setPollVotesMap(vMap);
+    }
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!currentUser?.id || !roomId) return;
+    refreshRoomAndMembers(currentUser.id);
+    refreshPolls();
+
+    const metaCh = supabase
+      .channel(`room-meta-${roomId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms' }, () => {
+        refreshRoomAndMembers(currentUser.id);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members' }, () => {
+        refreshRoomAndMembers(currentUser.id);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'polls' }, () => {
+        refreshPolls();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'poll_votes' }, () => {
+        refreshPolls();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(metaCh);
+    };
+  }, [currentUser?.id, roomId, refreshRoomAndMembers, refreshPolls]);
+
+  const handleCreatePoll = async ({ question, options, allowMultiple }) => {
+    if (!currentUser?.id || !roomId) return;
+    const { data: pollRow, error: pErr } = await supabase
+      .from('polls')
+      .insert({
+        room_id: String(roomId),
+        created_by: currentUser.id,
+        question,
+        options,
+        allow_multiple: allowMultiple,
+      })
+      .select('id')
+      .single();
+    if (pErr) {
+      alert('Gagal membuat polling: ' + pErr.message);
+      return;
+    }
+
+    const { data: msgRow, error: mErr } = await supabase
+      .from('messages')
+      .insert({
+        room_id: roomId,
+        sender_id: currentUser.id,
+        content: question,
+        media_type: 'poll',
+        poll_id: pollRow.id,
+      })
+      .select(
+        'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
+      )
+      .single();
+    if (!mErr && msgRow) {
+      setMessages((prev) => (prev.some((m) => m.id === msgRow.id) ? prev : [...prev, msgRow]));
+      scrollToBottom();
+      refreshPolls();
+    }
+  };
+
+  const handleUploadAdvancedVoice = async (blob) => {
+    if (!blob || !currentUser?.id || uploadingVoice) return;
+    setUploadingVoice(true);
+    try {
+      const filePath = `${roomId}/vn-${currentUser.id}-${Date.now()}.webm`;
+      const { error: upErr } = await supabase.storage
+        .from('chat-media')
+        .upload(filePath, blob, { contentType: blob.type || 'audio/webm', upsert: false });
+      if (upErr) throw upErr;
+      const { data: uData } = supabase.storage.from('chat-media').getPublicUrl(filePath);
+      const { data: msgRow, error: mErr } = await supabase
+        .from('messages')
+        .insert({
+          room_id: roomId,
+          sender_id: currentUser.id,
+          content: '',
+          media_url: uData.publicUrl,
+          media_type: 'audio',
+          reply_to_id: replyingTo?.id || null,
+        })
+        .select(
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
+        )
+        .single();
+      if (mErr) throw mErr;
+      setReplyingTo(null);
+      setShowVoiceRecorder(false);
+      if (msgRow) {
+        setMessages((prev) => (prev.some((m) => m.id === msgRow.id) ? prev : [...prev, msgRow]));
+        scrollToBottom();
+        sendPushNotification({
+          roomId,
+          title: roomMeta?.is_group
+            ? roomMeta.name
+            : myProfile?.display_name || myProfile?.username || 'Pesan Baru',
+          body: '🎤 Mengirim pesan suara',
+          url: `/chat/${roomId}`,
+          tag: `room-${roomId}`,
+        });
+      }
+    } catch (err) {
+      alert('Gagal mengirim voice note: ' + (err.message || 'Error'));
+    } finally {
+      setUploadingVoice(false);
+    }
   };
 
   // Lompat & sorot pesan tertentu (untuk Pin & Pencarian)
@@ -1175,7 +1370,7 @@ function ChatRoomContent() {
           is_forwarded: true,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
         )
         .single();
       if (error) throw error;
@@ -1340,7 +1535,7 @@ function ChatRoomContent() {
               reply_to_id: replyingTo?.id || null,
             })
             .select(
-              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
+              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at, poll_id, mentions'
             )
             .single();
           if (msgErr) throw msgErr;
@@ -1438,16 +1633,23 @@ function ChatRoomContent() {
 
           <button
             type="button"
-            onClick={() => setShowProfileModal(true)}
+            onClick={() => {
+              if (roomMeta?.is_group) setShowGroupInfo(true);
+              else setShowProfileModal(true);
+            }}
             className="flex items-center gap-2.5 min-w-0 flex-1 text-left py-0.5 rounded-xl"
           >
             <div className="relative shrink-0">
               <Avatar
-                src={otherUser?.avatar_url}
-                name={otherUser?.display_name || otherUser?.username}
+                src={roomMeta?.is_group ? roomMeta.avatar_url : otherUser?.avatar_url}
+                name={
+                  roomMeta?.is_group
+                    ? roomMeta.name || 'Grup'
+                    : otherUser?.display_name || otherUser?.username
+                }
                 size="sm"
               />
-              {isOtherOnline && !isBlocked && (
+              {!roomMeta?.is_group && isOtherOnline && !isBlocked && (
                 <span
                   className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ${
                     isDark ? 'ring-[#09090B]' : 'ring-white'
@@ -1457,26 +1659,32 @@ function ChatRoomContent() {
             </div>
             <div className="min-w-0">
               <p className="font-semibold text-sm leading-tight truncate">
-                {otherUser?.display_name || otherUser?.username || 'Obrolan'}
+                {roomMeta?.is_group
+                  ? roomMeta.name || 'Grup'
+                  : otherUser?.display_name || otherUser?.username || 'Obrolan'}
               </p>
               <p
                 className={`text-[11px] truncate ${
                   isOtherTyping
                     ? 'text-blue-500 font-semibold'
-                    : isOtherOnline && !isBlocked
+                    : !roomMeta?.is_group && isOtherOnline && !isBlocked
                       ? 'text-emerald-500 font-medium'
                       : isDark
                         ? 'text-zinc-400'
                         : 'text-zinc-500'
                 }`}
               >
-                {isBlocked
-                  ? 'Diblokir'
-                  : isOtherTyping
-                    ? 'Sedang mengetik...'
-                    : isOtherOnline
-                      ? 'Online'
-                      : formatLastSeen(otherUser?.last_seen)}
+                {roomMeta?.is_group
+                  ? isOtherTyping
+                    ? 'Seseorang sedang mengetik...'
+                    : `${groupMembers.length} anggota${roomMeta?.only_admins_can_send ? ' · Hanya admin kirim' : ''}`
+                  : isBlocked
+                    ? 'Diblokir'
+                    : isOtherTyping
+                      ? 'Sedang mengetik...'
+                      : isOtherOnline
+                        ? 'Online'
+                        : formatLastSeen(otherUser?.last_seen)}
               </p>
             </div>
           </button>
@@ -1521,6 +1729,15 @@ function ChatRoomContent() {
             }`}
           >
             <Search className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setShowPollModal(true)}
+            title="Buat Polling / Voting"
+            className={`p-2 rounded-xl transition ${
+              isDark ? 'hover:bg-zinc-800 text-zinc-200' : 'hover:bg-zinc-100 text-zinc-700'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4" />
           </button>
           <button
             onClick={() => setShowAppearanceModal(true)}
@@ -1680,14 +1897,19 @@ function ChatRoomContent() {
                 className={`flex flex-col ${isMine ? 'items-end' : 'items-start'}`}
               >
                 <div className={`flex items-end gap-2 max-w-[85%] ${isMine ? 'justify-end' : 'justify-start'}`}>
-                  {!isMine && (
-                    <Avatar
-                      src={otherUser?.avatar_url}
-                      name={otherUser?.display_name || otherUser?.username}
-                      size="xs"
-                      className="mb-0.5"
-                    />
-                  )}
+                  {!isMine && (() => {
+                    const senderProf = roomMeta?.is_group
+                      ? groupMembers.find((gm) => gm.user_id === msg.sender_id)?.profile
+                      : otherUser;
+                    return (
+                      <Avatar
+                        src={senderProf?.avatar_url}
+                        name={senderProf?.display_name || senderProf?.username}
+                        size="xs"
+                        className="mb-0.5"
+                      />
+                    );
+                  })()}
 
                   <div
                     onClick={() => {
@@ -1705,6 +1927,16 @@ function ChatRoomContent() {
                             : 'bg-white text-zinc-900 border border-zinc-200 rounded-bl-sm'
                     }`}
                   >
+                    {/* Nama Pengirim di dalam Grup */}
+                    {roomMeta?.is_group && !isMine && (
+                      <p className="text-[11px] font-bold text-blue-400 mb-0.5">
+                        {(() => {
+                          const senderObj = groupMembers.find((gm) => gm.user_id === msg.sender_id)?.profile;
+                          return senderObj?.display_name || senderObj?.username || 'Anggota';
+                        })()}
+                      </p>
+                    )}
+
                     {/* Quote Reply */}
                     {repliedMsg && !msg.is_deleted && (
                       <div
@@ -1875,6 +2107,18 @@ function ChatRoomContent() {
                               );
                             })}
                           </div>
+                        )}
+
+                        {/* Polling / Voting */}
+                        {msg.media_type === 'poll' && msg.poll_id && (
+                          <PollCard
+                            poll={pollsMap[msg.poll_id]}
+                            votes={pollVotesMap[msg.poll_id] || []}
+                            currentUserId={currentUser?.id}
+                            isMine={isMine}
+                            isDark={isDark}
+                            onVoted={refreshPolls}
+                          />
                         )}
 
                         {/* Stiker Kustom */}
@@ -2122,7 +2366,7 @@ function ChatRoomContent() {
                           </div>
                         )}
 
-                        {msg.content && msg.media_type !== 'location' && msg.media_type !== 'live_location' && (
+                        {msg.content && msg.media_type !== 'location' && msg.media_type !== 'live_location' && msg.media_type !== 'poll' && (
                           <>
                             <p className="whitespace-pre-wrap leading-relaxed">
                               {renderHighlightedText(msg.content)}
@@ -2440,6 +2684,42 @@ function ChatRoomContent() {
         </div>
       )}
 
+      {/* Popup Autocomplete Mention (@username) di Grup */}
+      {roomMeta?.is_group && mentionQuery !== null && !isBlocked && (
+        <div
+          className={`px-3 py-2 border-t flex items-center gap-1.5 overflow-x-auto shrink-0 ${
+            isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
+          }`}
+        >
+          {groupMembers
+            .filter(
+              (m) =>
+                m.user_id !== currentUser?.id &&
+                (m.profile?.username || '').toLowerCase().includes(mentionQuery)
+            )
+            .slice(0, 8)
+            .map((m) => (
+              <button
+                key={m.user_id}
+                type="button"
+                onClick={() => {
+                  const uname = m.profile?.username || '';
+                  setText((prev) =>
+                    prev.replace(/(?:^|\s)@[a-zA-Z0-9_]{0,20}$/, (match) => {
+                      const prefix = match.startsWith(' ') ? ' ' : '';
+                      return `${prefix}@${uname} `;
+                    })
+                  );
+                  setMentionQuery(null);
+                }}
+                className="px-2.5 py-1 rounded-full bg-blue-600/15 text-blue-500 text-xs font-semibold shrink-0"
+              >
+                @{m.profile?.username}
+              </button>
+            ))}
+        </div>
+      )}
+
       {/* Footer: Banner Blokir ATAU Input Bar */}
       {isBlocked ? (
         <div
@@ -2570,17 +2850,25 @@ function ChatRoomContent() {
             value={text}
             onFocus={() => setShowStickerDrawer(false)}
             onChange={(e) => handleTextChange(e.target.value)}
+            onKeyUp={(e) => {
+              if (!roomMeta?.is_group) return;
+              const val = e.currentTarget.value || '';
+              const m = val.match(/(?:^|\s)@([a-zA-Z0-9_]{0,20})$/);
+              setMentionQuery(m ? m[1].toLowerCase() : null);
+            }}
             onKeyDown={handleKeyDown}
             placeholder={
-              editingMsg
-                ? 'Edit pesan...'
-                : uploadingVoice
-                  ? 'Mengirim voice note...'
-                  : pendingMedia
-                    ? 'Tambah keterangan (opsional)...'
-                    : 'Tulis pesan...'
+              isGroupLockedForMe
+                ? 'Hanya admin yang dapat mengirim pesan...'
+                : editingMsg
+                  ? 'Edit pesan...'
+                  : uploadingVoice
+                    ? 'Mengirim voice note...'
+                    : pendingMedia
+                      ? 'Tambah keterangan (opsional)...'
+                      : 'Tulis pesan...'
             }
-            disabled={uploadingVoice}
+            disabled={uploadingVoice || isGroupLockedForMe}
             className={`flex-1 rounded-xl px-3.5 py-2.5 text-sm border resize-none max-h-28 focus:outline-none ${
               isDark
                 ? 'bg-zinc-900 border-zinc-700 text-white placeholder-zinc-400 focus:border-blue-500'
@@ -2599,7 +2887,9 @@ function ChatRoomContent() {
           ) : (
             <button
               type="button"
-              onClick={startRecording}
+              onClick={() => {
+                if (!isGroupLockedForMe) setShowVoiceRecorder(true);
+              }}
               disabled={uploadingVoice}
               title="Rekam Voice Note"
               className="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white transition shrink-0"
@@ -2662,6 +2952,21 @@ function ChatRoomContent() {
               >
                 <Reply className="w-4 h-4 text-blue-600" /> Balas Pesan
               </button>
+
+              {selectedMsg.sender_id === currentUser?.id && !selectedMsg.is_deleted && (
+                <button
+                  onClick={() => {
+                    const target = selectedMsg;
+                    setSelectedMsg(null);
+                    setInfoModalMsg(target);
+                  }}
+                  className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-3 text-sm font-medium ${
+                    isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'
+                  }`}
+                >
+                  <Info className="w-4 h-4 text-emerald-500" /> Info Pesan
+                </button>
+              )}
 
               {showMoreEmojis && !selectedMsg.is_deleted && (
                 <div
@@ -3033,6 +3338,49 @@ function ChatRoomContent() {
             </div>
           </div>
         </div>
+      )}
+
+      {showVoiceRecorder && (
+        <div className="fixed inset-x-0 bottom-0 z-40">
+          <VoiceNoteRecorder
+            isDark={isDark}
+            uploading={uploadingVoice}
+            onSendBlob={handleUploadAdvancedVoice}
+            onCancel={() => setShowVoiceRecorder(false)}
+          />
+        </div>
+      )}
+
+      {showGroupInfo && roomMeta?.is_group && (
+        <GroupInfoModal
+          roomId={roomId}
+          roomMeta={roomMeta}
+          members={groupMembers}
+          currentUser={currentUser}
+          myRole={myRole}
+          isDark={isDark}
+          onClose={() => setShowGroupInfo(false)}
+          onRefreshGroup={() => refreshRoomAndMembers(currentUser?.id)}
+          onDeletedOrLeft={() => router.replace('/')}
+          onZoomAvatar={(cfg) => setZoomViewer(cfg)}
+        />
+      )}
+
+      {showPollModal && (
+        <PollCreateModal
+          isDark={isDark}
+          onClose={() => setShowPollModal(false)}
+          onSubmitPoll={handleCreatePoll}
+        />
+      )}
+
+      {infoModalMsg && (
+        <MessageInfoModal
+          message={infoModalMsg}
+          members={groupMembers}
+          isDark={isDark}
+          onClose={() => setInfoModalMsg(null)}
+        />
       )}
 
       {/* Modal Fullscreen Perbesar Video */}
