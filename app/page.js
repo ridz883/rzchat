@@ -43,7 +43,7 @@ import {
 import Avatar from '../components/Avatar';
 import GroupCreateModal from '../components/GroupCreateModal';
 import StatusSection from '../components/StatusSection';
-import { Users, CircleDot, Star as FavStar, Trash2 } from 'lucide-react';
+import { Users, CircleDot, Star as FavStar } from 'lucide-react';
 import ZoomableLightbox from '../components/ZoomableLightbox';
 import { ANDROID_IMAGE_ACCEPT } from '../lib/security';
 
