@@ -1,7 +1,4 @@
 import { NextResponse } from 'next/server';
-
-export const dynamic = 'force-dynamic';
-
 const ID_TO_EN = {
   sedih: 'sad crying',
   nangis: 'crying sad',
