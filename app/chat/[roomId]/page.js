@@ -58,7 +58,7 @@ import PollCard from '../../../components/PollCard';
 import PollCreateModal from '../../../components/PollCreateModal';
 import MessageInfoModal from '../../../components/MessageInfoModal';
 import VoiceNoteRecorder from '../../../components/VoiceNoteRecorder';
-import { BarChart3, Info } from 'lucide-react';
+import { BarChart3 } from 'lucide-react';
 import {
   CHAT_ACCENTS,
   CHAT_WALLPAPERS,

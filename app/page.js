@@ -543,10 +543,6 @@ export default function HomePage() {
           loadBlockedUsers(authUser.id);
         })
         .subscribe();
-    };
-
-    init();
-
       const onReSync = () => {
         if (document.visibilityState === 'visible') {
           loadRooms(authUser.id);
