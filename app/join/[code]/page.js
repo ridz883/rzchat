@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Users, Loader2, ArrowRight, AlertCircle } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useTheme } from '../../../lib/useTheme';
 import Avatar from '../../../components/Avatar';
 
-export default function JoinGroupPage() {
+function JoinGroupContent() {
   const params = useParams();
   const router = useRouter();
   const code = String(params?.code || '').trim();
@@ -40,6 +40,10 @@ export default function JoinGroupPage() {
       setLoading(false);
     };
     if (code) load();
+    else {
+      setErrorMsg('Kode undangan tidak ditemukan.');
+      setLoading(false);
+    }
     return () => {
       active = false;
     };
@@ -128,5 +132,19 @@ export default function JoinGroupPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function JoinGroupPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-[100dvh] bg-[#09090B] flex items-center justify-center">
+          <Loader2 className="w-7 h-7 animate-spin text-blue-600" />
+        </div>
+      }
+    >
+      <JoinGroupContent />
+    </Suspense>
   );
 }
