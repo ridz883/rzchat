@@ -41,6 +41,8 @@ import {
   unsubscribeUserFromPush,
 } from '../lib/pushClient';
 import Avatar from '../components/Avatar';
+import VerifiedBadge from '../components/VerifiedBadge';
+import AccountHub from '../components/AccountHub';
 import GroupCreateModal from '../components/GroupCreateModal';
 import StatusSection from '../components/StatusSection';
 import { Users, CircleDot, Star as FavStar } from 'lucide-react';
@@ -163,7 +165,7 @@ export default function HomePage() {
 
     const { data: profs } = await supabase
       .from('profiles')
-      .select('id, username, display_name, avatar_url')
+      .select('id, username, display_name, avatar_url, is_verified, badge_type')
       .in('id', ids);
 
     setBlockedList(profs || []);
@@ -202,7 +204,7 @@ export default function HomePage() {
       otherUserIds.length > 0
         ? await supabase
             .from('profiles')
-            .select('id, username, display_name, avatar_url, status_text, last_seen')
+            .select('id, username, display_name, avatar_url, status_text, last_seen, is_verified, badge_type')
             .in('id', otherUserIds)
         : { data: [] };
 
@@ -400,7 +402,7 @@ export default function HomePage() {
       const peerIds = [...new Set(logs.map((l) => (l.caller_id === userId ? l.callee_id : l.caller_id)))];
       const { data: profs } = await supabase
         .from('profiles')
-        .select('id, username, display_name, avatar_url')
+        .select('id, username, display_name, avatar_url, is_verified, badge_type')
         .in('id', peerIds);
       const pMap = {};
       (profs || []).forEach((p) => {
@@ -768,8 +770,9 @@ export default function HomePage() {
               <p className="font-bold text-sm leading-tight truncate">
                 {profile?.display_name || profile?.username}
               </p>
-              <p className={`text-xs truncate ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                @{profile?.username}
+              <p className={`text-xs truncate flex items-center gap-1 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                <span className="truncate">@{profile?.username}</span>
+                <VerifiedBadge user={profile} size="xs" />
               </p>
             </div>
           </div>
@@ -972,8 +975,9 @@ export default function HomePage() {
                           <p className="font-semibold text-sm truncate">
                             {target.display_name || target.username}
                           </p>
-                          <p className={`text-xs truncate ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                            @{target.username}
+                          <p className={`text-xs truncate flex items-center gap-1 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                            <span className="truncate">@{target.username}</span>
+                            <VerifiedBadge user={target} size="xs" />
                           </p>
                         </div>
                       </div>
@@ -1183,7 +1187,10 @@ export default function HomePage() {
                       >
                         <Avatar
                           src={item.otherUser.avatar_url}
-                          name={item.otherUser.display_name || item.otherUser.username}
+                          name=<span className="inline-flex items-center gap-1 min-w-0">
+                              <span className="truncate">{item.otherUser.display_name || item.otherUser.username}</span>
+                              {!item.isGroup && <VerifiedBadge user={item.otherUser} size="xs" />}
+                            </span>
                           size="md"
                         />
                         {isOnline && (
@@ -1413,375 +1420,49 @@ export default function HomePage() {
           onUnseenChange={setHasUnseenStatus}
         />
       ) : (
-        /* TAB AKUN, NOTIFIKASI PUSH & BLOKIR */
-        <main className="flex-1 overflow-y-auto px-4 py-5">
-          <div className="max-w-lg mx-auto space-y-5 pb-8">
-            <div className="flex flex-col items-center text-center">
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setZoomAvatar({
-                      url: editAvatar || '',
-                      title: editDisplayName || editUsername || 'Foto Profil',
-                      subtitle: editUsername ? `@${editUsername}` : '',
-                    })
-                  }
-                  title="Ketuk untuk perbesar foto profil"
-                  className="rounded-full cursor-zoom-in"
-                >
-                  <Avatar
-                    src={editAvatar}
-                    name={editDisplayName || editUsername}
-                    size="xl"
-                    className="shadow-sm"
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="absolute bottom-0 right-0 p-2 rounded-full bg-blue-600 text-white shadow-md"
-                >
-                  <Camera className="w-4 h-4" />
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={ANDROID_IMAGE_ACCEPT}
-                  onChange={handlePhotoSelect}
-                  className="hidden"
-                />
-              </div>
-
-              <div className="mt-3 flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="text-xs font-semibold text-blue-600"
-                >
-                  Ubah Foto
-                </button>
-                {editAvatar && (
-                  <button
-                    type="button"
-                    onClick={() => setEditAvatar('')}
-                    className="text-xs font-medium text-red-500 flex items-center gap-1"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" /> Hapus Foto
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {saveMessage.text && (
-              <div
-                className={`p-3 rounded-xl text-xs border ${
-                  saveMessage.type === 'success'
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600'
-                    : 'bg-red-500/10 border-red-500/30 text-red-500'
-                }`}
-              >
-                {saveMessage.text}
-              </div>
-            )}
-
-            <form onSubmit={handleSaveProfile} className="space-y-3.5">
-              <div>
-                <label className={`block text-xs font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
-                  Nama Tampilan
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={editDisplayName}
-                  onChange={(e) => setEditDisplayName(e.target.value)}
-                  className={inputClass}
-                />
-              </div>
-
-              <div>
-                <label className={`block text-xs font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
-                  Username
-                </label>
-                <div className="relative">
-                  <span className="text-zinc-400 text-sm font-semibold absolute left-3.5 top-2.5">@</span>
-                  <input
-                    type="text"
-                    required
-                    value={editUsername}
-                    onChange={(e) => setEditUsername(e.target.value.replace(/\s/g, ''))}
-                    className={`${inputClass} pl-8`}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className={`block text-xs font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
-                  Bio
-                </label>
-                <textarea
-                  rows={2}
-                  value={editBio}
-                  onChange={(e) => setEditBio(e.target.value)}
-                  placeholder="Ceritakan sedikit tentang dirimu..."
-                  className={`${inputClass} resize-none`}
-                />
-              </div>
-
-              <div>
-                <label className={`block text-xs font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
-                  Status / Info Singkat
-                </label>
-                <input
-                  type="text"
-                  value={editStatus}
-                  onChange={(e) => setEditStatus(e.target.value)}
-                  placeholder="Tersedia, Sibuk, dll."
-                  className={inputClass}
-                />
-              </div>
-
-              <div>
-                <label className={`block text-xs font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
-                  Lokasi
-                </label>
-                <input
-                  type="text"
-                  value={editLocation}
-                  onChange={(e) => setEditLocation(e.target.value)}
-                  placeholder="Depok, Indonesia"
-                  className={inputClass}
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={savingProfile}
-                className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold text-sm flex items-center justify-center gap-2"
-              >
-                {savingProfile ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                Simpan Perubahan
-              </button>
-            </form>
-
-            {/* True Web Push Settings */}
-            <div
-              className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
-                isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
-              }`}
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-emerald-500/15 text-emerald-500 flex items-center justify-center shrink-0">
-                  <Bell className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs font-bold">Notifikasi Push (Real-Time)</p>
-                  <p className={`text-[11px] truncate ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                    {pushState.enabled
-                      ? 'Aktif — pesan & panggilan masuk walau ditutup'
-                      : 'Nonaktif — ketuk untuk mengaktifkan'}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={handleTogglePush}
-                disabled={pushBusy || !pushState.supported}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 ${
-                  pushState.enabled
-                    ? 'bg-red-500/15 text-red-500'
-                    : 'bg-blue-600 text-white'
-                }`}
-              >
-                {pushBusy ? '...' : pushState.enabled ? 'Matikan' : 'Aktifkan'}
-              </button>
-            </div>
-
-            {/* Install PWA */}
-            <div
-              className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
-                isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
-              }`}
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-blue-600/15 text-blue-600 flex items-center justify-center shrink-0">
-                  <Smartphone className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs font-bold">Install Aplikasi (PWA)</p>
-                  <p className={`text-[11px] truncate ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                    {isPwaInstalled
-                      ? 'Sudah terpasang sebagai aplikasi'
-                      : pwaReady
-                        ? 'Siap dipasang langsung dengan 1 ketukan'
-                        : 'Pasang rzchat ke layar utama HP'}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={handleSmartPwaInstall}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 ${
-                  isPwaInstalled
-                    ? 'bg-emerald-500/15 text-emerald-500'
-                    : 'bg-blue-600 text-white'
-                }`}
-              >
-                {isPwaInstalled ? 'Terpasang' : 'Install'}
-              </button>
-            </div>
-
-            {/* Pesan Berbintang */}
-            <div
-              className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
-                isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
-              }`}
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/15 text-amber-500 flex items-center justify-center shrink-0">
-                  <Star className="w-4 h-4 fill-current" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs font-bold">Pesan Berbintang</p>
-                  <p className={`text-[11px] truncate ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                    Lihat semua pesan penting yang kamu simpan
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowStarredModal(true);
-                  if (user?.id) loadStarredMessages(user.id);
-                }}
-                className="px-3 py-1.5 rounded-xl bg-amber-500 text-white text-xs font-semibold shrink-0"
-              >
-                Buka
-              </button>
-            </div>
-
-            {/* Daftar Pengguna Diblokir */}
-            <div
-              className={`p-4 rounded-2xl border ${
-                isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
-              }`}
-            >
-              <div className="flex items-center gap-2 mb-3">
-                <Ban className="w-4 h-4 text-red-500" />
-                <p className="text-xs font-bold">Pengguna Diblokir ({blockedList.length})</p>
-              </div>
-              {blockedList.length === 0 ? (
-                <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                  Tidak ada pengguna yang diblokir.
-                </p>
-              ) : (
-                <div className="space-y-2.5">
-                  {blockedList.map((u) => (
-                    <div key={u.id} className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Avatar src={u.avatar_url} name={u.display_name || u.username} size="xs" />
-                        <div className="min-w-0">
-                          <p className="text-xs font-semibold truncate">{u.display_name || u.username}</p>
-                          <p className="text-[11px] text-zinc-400 truncate">@{u.username}</p>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleUnblockFromList(u.id)}
-                        className="px-2.5 py-1 rounded-lg bg-blue-600 text-white text-[11px] font-semibold shrink-0"
-                      >
-                        Buka Blokir
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </main>
-      )}
-
-      {zoomAvatar && (
-        <ZoomableLightbox
-          images={zoomAvatar.url ? [zoomAvatar.url] : []}
-          title={zoomAvatar.title}
-          subtitle={zoomAvatar.subtitle}
-          fallbackInitial={zoomAvatar.title}
-          canSave={Boolean(zoomAvatar.url)}
-          onClose={() => setZoomAvatar(null)}
+        /* TAB AKUN BARU (BERSIH & FUNGSIONAL) */
+        <AccountHub
+          user={user}
+          profile={profile}
+          isDark={isDark}
+          toggleTheme={toggleTheme}
+          rooms={rooms}
+          blockedList={blockedList}
+          pushState={pushState}
+          pushBusy={pushBusy}
+          onTogglePush={handleTogglePush}
+          onLogout={handleLogout}
+          onOpenStarred={openStarredMessages}
+          onOpenArchived={() => {
+            setActiveTab('chat');
+            setShowArchived(true);
+          }}
+          onOpenCreateGroup={() => setShowCreateGroup(true)}
+          onOpenFilter={(flt) => {
+            setActiveTab('chat');
+            setShowArchived(false);
+            setChatFilter(flt);
+          }}
+          onZoomAvatar={(cfg) => setZoomAvatar(cfg)}
+          fileInputRef={fileInputRef}
+          onPhotoSelect={handlePhotoSelect}
+          editDisplayName={editDisplayName}
+          setEditDisplayName={setEditDisplayName}
+          editUsername={editUsername}
+          setEditUsername={setEditUsername}
+          editBio={editBio}
+          setEditBio={setEditBio}
+          editStatus={editStatus}
+          setEditStatus={setEditStatus}
+          editLocation={editLocation}
+          setEditLocation={setEditLocation}
+          editAvatar={editAvatar}
+          setEditAvatar={setEditAvatar}
+          savingProfile={savingProfile}
+          onSaveProfile={handleSaveProfile}
+          onUnblockUser={handleUnblockUser}
         />
       )}
-
-      {showStarredModal && (
-        <div
-          className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4"
-          onClick={() => setShowStarredModal(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className={`w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl p-5 shadow-xl max-h-[80vh] flex flex-col ${
-              isDark ? 'bg-[#121215] text-zinc-100 border border-zinc-800' : 'bg-white text-zinc-900'
-            }`}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="font-bold text-sm flex items-center gap-2">
-                <Star className="w-4 h-4 text-amber-500 fill-current" /> Pesan Berbintang
-              </h2>
-              <button
-                type="button"
-                onClick={() => setShowStarredModal(false)}
-                className={`p-1.5 rounded-lg ${isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'}`}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto space-y-2">
-              {loadingStarred ? (
-                <div className="py-10 flex justify-center">
-                  <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
-                </div>
-              ) : starredList.length === 0 ? (
-                <p className="py-10 text-center text-xs text-zinc-500">
-                  Belum ada pesan berbintang. Ketuk pesan di dalam chat lalu pilih "Bintangi Pesan".
-                </p>
-              ) : (
-                starredList.map((item) => {
-                  const roomObj = rooms.find((r) => String(r.roomId) === String(item.room_id));
-                  const peerName =
-                    roomObj?.otherUser?.display_name || roomObj?.otherUser?.username || 'Obrolan';
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        setShowStarredModal(false);
-                        router.push(`/chat/${item.room_id}`);
-                      }}
-                      className={`w-full p-3 rounded-xl border text-left transition ${
-                        isDark
-                          ? 'bg-zinc-900 border-zinc-800 hover:border-blue-500'
-                          : 'bg-zinc-50 border-zinc-200 hover:border-blue-500'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-[11px] font-bold text-blue-500 truncate">{peerName}</span>
-                        <span className="text-[10px] text-zinc-400 shrink-0">
-                          {new Date(item.message.created_at).toLocaleDateString('id-ID', {
-                            day: 'numeric',
-                            month: 'short',
-                          })}
-                        </span>
-                      </div>
-                      <p className="text-xs line-clamp-2">{formatPreviewText(item.message)}</p>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       </div>
 
       {showCreateGroup && (

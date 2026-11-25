@@ -47,6 +47,7 @@ import { useTheme } from '../../../lib/useTheme';
 import { useCall } from '../../../components/CallProvider';
 import { sendPushNotification } from '../../../lib/pushClient';
 import Avatar from '../../../components/Avatar';
+import VerifiedBadge from '../../../components/VerifiedBadge';
 import LinkPreviewCard from '../../../components/LinkPreviewCard';
 import VoiceNotePlayer from '../../../components/VoiceNotePlayer';
 import ZoomableLightbox from '../../../components/ZoomableLightbox';
@@ -1103,7 +1104,7 @@ function ChatRoomContent() {
     if (ids.length > 0) {
       const { data: profs } = await supabase
         .from('profiles')
-        .select('id, username, display_name, avatar_url, status_text, last_seen')
+        .select('id, username, display_name, avatar_url, status_text, last_seen, is_verified, badge_type')
         .in('id', ids);
       const pMap = {};
       (profs || []).forEach((p) => {
@@ -1659,10 +1660,13 @@ function ChatRoomContent() {
               )}
             </div>
             <div className="min-w-0">
-              <p className="font-semibold text-sm leading-tight truncate">
-                {roomMeta?.is_group
-                  ? roomMeta.name || 'Grup'
-                  : otherUser?.display_name || otherUser?.username || 'Obrolan'}
+              <p className="font-semibold text-sm leading-tight truncate flex items-center gap-1">
+                <span className="truncate">
+                  {roomMeta?.is_group
+                    ? roomMeta.name || 'Grup'
+                    : otherUser?.display_name || otherUser?.username || 'Obrolan'}
+                </span>
+                {!roomMeta?.is_group && <VerifiedBadge user={otherUser} size="xs" />}
               </p>
               <p
                 className={`text-[11px] truncate ${
@@ -1931,14 +1935,15 @@ function ChatRoomContent() {
                     }`}
                   >
                     {/* Nama Pengirim di dalam Grup */}
-                    {roomMeta?.is_group && !isMine && (
-                      <p className="text-[11px] font-bold text-blue-400 mb-0.5">
-                        {(() => {
-                          const senderObj = groupMembers.find((gm) => gm.user_id === msg.sender_id)?.profile;
-                          return senderObj?.display_name || senderObj?.username || 'Anggota';
-                        })()}
-                      </p>
-                    )}
+                    {roomMeta?.is_group && !isMine && (() => {
+                      const senderObj = groupMembers.find((gm) => gm.user_id === msg.sender_id)?.profile;
+                      return (
+                        <p className="text-[11px] font-bold text-blue-400 mb-0.5 flex items-center gap-1">
+                          <span>{senderObj?.display_name || senderObj?.username || 'Anggota'}</span>
+                          <VerifiedBadge user={senderObj} size="xs" />
+                        </p>
+                      );
+                    })()}
 
                     {/* Quote Reply */}
                     {repliedMsg && !msg.is_deleted && (
@@ -3576,8 +3581,9 @@ function ChatRoomContent() {
               <h3 className="font-bold text-lg mt-3">
                 {otherUser.display_name || otherUser.username}
               </h3>
-              <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                @{otherUser.username}
+              <p className={`text-xs flex items-center justify-center gap-1.5 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                <span>@{otherUser.username}</span>
+                <VerifiedBadge user={otherUser} size="sm" />
               </p>
               {otherUser.status_text && (
                 <span
