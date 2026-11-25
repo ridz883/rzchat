@@ -1,90 +1,101 @@
 'use client';
 
-import { useRef, useState } from 'react';
-import { Plus, Trash2, Loader2, Smile, Check, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Plus, Trash2, Loader2, Smile, Check, X, Move, SlidersHorizontal } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { ANDROID_IMAGE_ACCEPT } from '../lib/security';
 
-function renderStickerBlob(file, captionText, shape = 'rounded') {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Gagal membaca gambar.'));
-    reader.onload = (ev) => {
-      const img = new Image();
-      img.onerror = () => reject(new Error('File bukan gambar valid.'));
-      img.onload = () => {
-        const size = 512;
-        const canvas = document.createElement('canvas');
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, size, size);
+const TEXT_COLORS = [
+  '#ffffff',
+  '#111111',
+  '#facc15',
+  '#ef4444',
+  '#3b82f6',
+  '#22c55e',
+  '#ec4899',
+  '#06b6d4',
+];
 
-        ctx.save();
-        if (shape === 'circle') {
-          ctx.beginPath();
-          ctx.arc(size / 2, size / 2, size / 2 - 10, 0, Math.PI * 2);
-          ctx.closePath();
-          ctx.clip();
-        } else if (shape === 'rounded') {
-          const r = 72;
-          const pad = 10;
-          const w = size - pad * 2;
-          ctx.beginPath();
-          ctx.moveTo(pad + r, pad);
-          ctx.lineTo(pad + w - r, pad);
-          ctx.quadraticCurveTo(pad + w, pad, pad + w, pad + r);
-          ctx.lineTo(pad + w, pad + w - r);
-          ctx.quadraticCurveTo(pad + w, pad + w, pad + w - r, pad + w);
-          ctx.lineTo(pad + r, pad + w);
-          ctx.quadraticCurveTo(pad, pad + w, pad, pad + w - r);
-          ctx.lineTo(pad, pad + r);
-          ctx.quadraticCurveTo(pad, pad, pad + r, pad);
-          ctx.closePath();
-          ctx.clip();
-        }
+const OUTLINE_OPTIONS = [
+  { id: '#000000', label: 'Hitam' },
+  { id: '#ffffff', label: 'Putih' },
+  { id: 'none', label: 'Tanpa' },
+];
 
-        const minSide = Math.min(img.width, img.height);
-        const sx = (img.width - minSide) / 2;
-        const sy = (img.height - minSide) / 2;
-        ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
-        ctx.restore();
+function drawStickerToCanvas(canvas, img, opts) {
+  if (!canvas || !img) return;
+  const size = 512;
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, size, size);
 
-        // Garis tepi putih khas stiker
-        if (shape === 'circle') {
-          ctx.beginPath();
-          ctx.arc(size / 2, size / 2, size / 2 - 12, 0, Math.PI * 2);
-          ctx.lineWidth = 10;
-          ctx.strokeStyle = '#ffffff';
-          ctx.stroke();
-        }
+  ctx.save();
+  if (opts.shape === 'circle') {
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - 10, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+  } else if (opts.shape === 'rounded') {
+    const r = 72;
+    const pad = 10;
+    const w = size - pad * 2;
+    ctx.beginPath();
+    ctx.moveTo(pad + r, pad);
+    ctx.lineTo(pad + w - r, pad);
+    ctx.quadraticCurveTo(pad + w, pad, pad + w, pad + r);
+    ctx.lineTo(pad + w, pad + w - r);
+    ctx.quadraticCurveTo(pad + w, pad + w, pad + w - r, pad + w);
+    ctx.lineTo(pad + r, pad + w);
+    ctx.quadraticCurveTo(pad, pad + w, pad, pad + w - r);
+    ctx.lineTo(pad, pad + r);
+    ctx.quadraticCurveTo(pad, pad, pad + r, pad);
+    ctx.closePath();
+    ctx.clip();
+  }
 
-        // Teks meme stiker di bagian bawah (opsional)
-        const text = (captionText || '').trim().toUpperCase().slice(0, 32);
-        if (text) {
-          ctx.font = '900 48px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'bottom';
-          ctx.lineWidth = 10;
-          ctx.strokeStyle = '#000000';
-          ctx.fillStyle = '#ffffff';
-          ctx.strokeText(text, size / 2, size - 26, size - 44);
-          ctx.fillText(text, size / 2, size - 26, size - 44);
-        }
+  const minSide = Math.min(img.width, img.height);
+  const sx = (img.width - minSide) / 2;
+  const sy = (img.height - minSide) / 2;
+  ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
+  ctx.restore();
 
-        canvas.toBlob(
-          (blob) => {
-            if (blob) resolve(blob);
-            else reject(new Error('Gagal membuat file stiker.'));
-          },
-          'image/webp',
-          0.9
-        );
-      };
-      img.src = ev.target.result;
-    };
-    reader.readAsDataURL(file);
-  });
+  if (opts.shape === 'circle') {
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - 12, 0, Math.PI * 2);
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+  }
+
+  const rawText = String(opts.caption || '').trim();
+  if (rawText) {
+    const display = opts.uppercase ? rawText.toUpperCase() : rawText;
+    const lines = display.split('\n').slice(0, 3);
+    const fontWeight = opts.fontStyle === 'bold' ? '900' : '600';
+    const fontSlope = opts.fontStyle === 'italic' ? 'italic ' : '';
+    const fontSize = Number(opts.fontSize) || 48;
+    ctx.font = `${fontSlope}${fontWeight} ${fontSize}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const cx = Math.max(40, Math.min(size - 40, (opts.textX / 100) * size));
+    const cy = Math.max(40, Math.min(size - 40, (opts.textY / 100) * size));
+    const lineHeight = fontSize * 1.15;
+    const startY = cy - ((lines.length - 1) * lineHeight) / 2;
+
+    lines.forEach((line, i) => {
+      const ly = startY + i * lineHeight;
+      if (opts.outline !== 'none') {
+        ctx.lineWidth = Math.max(6, Math.round(fontSize * 0.2));
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = opts.outline;
+        ctx.strokeText(line, cx, ly, size - 44);
+      }
+      ctx.fillStyle = opts.textColor;
+      ctx.fillText(line, cx, ly, size - 44);
+    });
+  }
 }
 
 export default function StickerStudio({
@@ -96,41 +107,132 @@ export default function StickerStudio({
   compact = false,
 }) {
   const inputRef = useRef(null);
+  const canvasRef = useRef(null);
+  const loadedImgRef = useRef(null);
+  const draggingRef = useRef(false);
+
   const [draftFile, setDraftFile] = useState(null);
   const [draftPreview, setDraftPreview] = useState('');
+  const [editorOpen, setEditorOpen] = useState(false);
+
   const [caption, setCaption] = useState('');
   const [shape, setShape] = useState('rounded');
+  const [textColor, setTextColor] = useState('#ffffff');
+  const [outline, setOutline] = useState('#000000');
+  const [fontSize, setFontSize] = useState(50);
+  const [fontStyle, setFontStyle] = useState('bold');
+  const [uppercase, setUppercase] = useState(true);
+  const [textX, setTextX] = useState(50);
+  const [textY, setTextY] = useState(84);
+
   const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+
+  useEffect(() => {
+    if (!draftPreview) {
+      loadedImgRef.current = null;
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      loadedImgRef.current = img;
+      drawStickerToCanvas(canvasRef.current, img, {
+        caption,
+        shape,
+        textColor,
+        outline,
+        fontSize,
+        fontStyle,
+        uppercase,
+        textX,
+        textY,
+      });
+    };
+    img.src = draftPreview;
+  }, [draftPreview, editorOpen]);
+
+  useEffect(() => {
+    if (!loadedImgRef.current || !canvasRef.current) return;
+    drawStickerToCanvas(canvasRef.current, loadedImgRef.current, {
+      caption,
+      shape,
+      textColor,
+      outline,
+      fontSize,
+      fontStyle,
+      uppercase,
+      textX,
+      textY,
+    });
+  }, [caption, shape, textColor, outline, fontSize, fontStyle, uppercase, textX, textY, editorOpen]);
 
   const handlePickPhoto = (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
     if (!file.type.startsWith('image/')) {
-      alert('Pilih file gambar untuk dibuat stiker.');
+      alert('Pilih file gambar/foto untuk dibuat stiker.');
       return;
     }
     if (draftPreview) URL.revokeObjectURL(draftPreview);
     setDraftFile(file);
     setDraftPreview(URL.createObjectURL(file));
     setCaption('');
+    setTextX(50);
+    setTextY(84);
+    setFontSize(50);
+    setTextColor('#ffffff');
+    setOutline('#000000');
+    setFontStyle('bold');
+    setUppercase(true);
+    setEditorOpen(true);
   };
 
   const resetDraft = () => {
     if (draftPreview) URL.revokeObjectURL(draftPreview);
+    loadedImgRef.current = null;
     setDraftFile(null);
     setDraftPreview('');
     setCaption('');
+    setEditorOpen(false);
+  };
+
+  const updatePosFromPointer = (clientX, clientY) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const nx = ((clientX - rect.left) / rect.width) * 100;
+    const ny = ((clientY - rect.top) / rect.height) * 100;
+    setTextX(Math.max(12, Math.min(88, Math.round(nx))));
+    setTextY(Math.max(12, Math.min(90, Math.round(ny))));
   };
 
   const handleSaveSticker = async () => {
-    if (!draftFile || !userId || creating) return;
+    if (!draftFile || !userId || creating || !loadedImgRef.current) return;
     setCreating(true);
     try {
-      const blob = await renderStickerBlob(draftFile, caption, shape);
-      const filePath = `stickers/${userId}/${Date.now()}.webp`;
+      const offscreen = document.createElement('canvas');
+      drawStickerToCanvas(offscreen, loadedImgRef.current, {
+        caption,
+        shape,
+        textColor,
+        outline,
+        fontSize,
+        fontStyle,
+        uppercase,
+        textX,
+        textY,
+      });
 
+      const blob = await new Promise((resolve, reject) => {
+        offscreen.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error('Gagal membuat file WebP stiker.'))),
+          'image/webp',
+          0.9
+        );
+      });
+
+      const filePath = `stickers/${userId}/${Date.now()}.webp`;
       const { error: upErr } = await supabase.storage
         .from('chat-media')
         .upload(filePath, blob, { contentType: 'image/webp', upsert: false });
@@ -148,8 +250,7 @@ export default function StickerStudio({
         .single();
       if (dbErr) throw dbErr;
 
-      const updated = [inserted, ...stickers];
-      onStickersChange?.(updated);
+      onStickersChange?.([inserted, ...stickers]);
       resetDraft();
     } catch (err) {
       alert('Gagal membuat stiker: ' + (err.message || 'Terjadi kesalahan'));
@@ -165,8 +266,8 @@ export default function StickerStudio({
       const { error } = await supabase.from('stickers').delete().eq('id', sticker.id);
       if (error) throw error;
       if (sticker.image_url?.includes('/chat-media/')) {
-        const path = decodeURIComponent(sticker.image_url.split('/chat-media/')[1].split('?')[0]);
-        supabase.storage.from('chat-media').remove([path]).catch(() => {});
+        const pathInBucket = decodeURIComponent(sticker.image_url.split('/chat-media/')[1].split('?')[0]);
+        supabase.storage.from('chat-media').remove([pathInBucket]).catch(() => {});
       }
       onStickersChange?.(stickers.filter((s) => s.id !== sticker.id));
     } catch (err) {
@@ -203,42 +304,245 @@ export default function StickerStudio({
         </button>
       </div>
 
-      {/* Editor Stiker Mini saat foto dipilih */}
-      {draftFile && (
+      {/* Ringkasan Draft (bila editor diminimize, klik foto untuk buka ulang editor penuh) */}
+      {draftFile && !editorOpen && (
         <div
-          className={`p-3 rounded-2xl border space-y-3 ${
+          className={`p-2.5 rounded-2xl border flex items-center justify-between gap-3 ${
             isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
           }`}
         >
-          <div className="flex items-center gap-3">
-            <div className="relative w-20 h-20 shrink-0 flex items-center justify-center bg-black/10 rounded-xl overflow-hidden">
-              <img
-                src={draftPreview}
-                alt="Preview stiker"
-                className={`w-full h-full object-cover ${
-                  shape === 'circle' ? 'rounded-full border-2 border-white' : shape === 'rounded' ? 'rounded-2xl' : ''
-                }`}
-              />
-              {caption.trim() && (
-                <span className="absolute bottom-1 left-1 right-1 text-center text-[9px] font-black text-white uppercase drop-shadow-[0_1px_2px_rgba(0,0,0,0.95)] truncate">
-                  {caption}
-                </span>
-              )}
+          <button
+            type="button"
+            onClick={() => setEditorOpen(true)}
+            className="flex items-center gap-2.5 min-w-0 text-left"
+          >
+            <img src={draftPreview} alt="Draft" className="w-12 h-12 rounded-xl object-cover shrink-0" />
+            <div className="min-w-0">
+              <p className="text-xs font-bold truncate">Ketuk foto untuk edit stiker & teks</p>
+              <p className="text-[11px] text-zinc-400 truncate">{caption || 'Belum ada teks'}</p>
+            </div>
+          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setEditorOpen(true)}
+              className="px-2.5 py-1.5 rounded-xl bg-blue-600 text-white text-[11px] font-semibold flex items-center gap-1"
+            >
+              <SlidersHorizontal className="w-3 h-3" /> Edit
+            </button>
+            <button type="button" onClick={resetDraft} className="p-1.5 text-zinc-400 hover:text-red-500">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Editor Stiker Interaktif (Klik Foto / Geser Teks Bebas dengan Jari) */}
+      {draftFile && editorOpen && (
+        <div
+          className="fixed inset-0 z-[75] bg-black/80 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={() => setEditorOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl p-4 shadow-2xl max-h-[92vh] overflow-y-auto space-y-3.5 ${
+              isDark ? 'bg-[#121215] text-zinc-100 border border-zinc-800' : 'bg-white text-zinc-900'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold flex items-center gap-1.5">
+                <SlidersHorizontal className="w-4 h-4 text-blue-600" /> Editor Stiker Kustom
+              </h3>
+              <button
+                type="button"
+                onClick={resetDraft}
+                className={`p-1.5 rounded-lg ${isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'}`}
+                aria-label="Tutup editor stiker"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
-            <div className="flex-1 min-w-0 space-y-2">
-              <input
-                type="text"
-                maxLength={32}
+            {/* Canvas Interaktif: Ketuk / Geser teks langsung dengan jari */}
+            <div className="flex flex-col items-center">
+              <div
+                className={`relative p-2 rounded-2xl border ${
+                  isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-100 border-zinc-200'
+                }`}
+              >
+                <canvas
+                  ref={canvasRef}
+                  onPointerDown={(e) => {
+                    draggingRef.current = true;
+                    e.currentTarget.setPointerCapture?.(e.pointerId);
+                    updatePosFromPointer(e.clientX, e.clientY);
+                  }}
+                  onPointerMove={(e) => {
+                    if (!draggingRef.current) return;
+                    updatePosFromPointer(e.clientX, e.clientY);
+                  }}
+                  onPointerUp={() => {
+                    draggingRef.current = false;
+                  }}
+                  style={{ touchAction: 'none' }}
+                  className="w-56 h-56 rounded-xl cursor-move block"
+                />
+              </div>
+              <p className="text-[11px] text-zinc-400 mt-1.5 flex items-center gap-1">
+                <Move className="w-3 h-3" /> Sentuh & geser langsung pada foto untuk atur posisi teks
+              </p>
+            </div>
+
+            {/* Input Teks Bebas */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-semibold text-zinc-400">Teks Stiker (bisa 3 baris)</label>
+                <button
+                  type="button"
+                  onClick={() => setUppercase((u) => !u)}
+                  className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                    uppercase
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : isDark
+                        ? 'bg-zinc-800 border-zinc-700 text-zinc-300'
+                        : 'bg-zinc-100 border-zinc-300 text-zinc-700'
+                  }`}
+                >
+                  {uppercase ? 'AA (Kapital)' : 'Aa (Normal)'}
+                </button>
+              </div>
+              <textarea
+                rows={2}
+                maxLength={60}
                 value={caption}
                 onChange={(e) => setCaption(e.target.value)}
-                placeholder="Tambah teks stiker (opsional)..."
-                className={`w-full px-3 py-1.5 rounded-xl text-xs border focus:outline-none ${
+                placeholder="Ketik teks stiker sesuka hati..."
+                className={`w-full px-3 py-2 rounded-xl text-xs border resize-none focus:outline-none ${
                   isDark
-                    ? 'bg-zinc-950 border-zinc-700 text-white placeholder-zinc-500'
-                    : 'bg-white border-zinc-300 text-zinc-900 placeholder-zinc-400'
+                    ? 'bg-zinc-900 border-zinc-700 text-white placeholder-zinc-500'
+                    : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
                 }`}
               />
+            </div>
+
+            {/* Posisi Cepat + Ukuran Teks */}
+            <div className="grid grid-cols-2 gap-3 items-center">
+              <div>
+                <p className="text-[11px] font-semibold text-zinc-400 mb-1">Posisi Cepat</p>
+                <div className="flex items-center gap-1">
+                  {[
+                    { label: 'Atas', y: 18 },
+                    { label: 'Tengah', y: 50 },
+                    { label: 'Bawah', y: 84 },
+                  ].map((pos) => (
+                    <button
+                      key={pos.label}
+                      type="button"
+                      onClick={() => {
+                        setTextX(50);
+                        setTextY(pos.y);
+                      }}
+                      className={`flex-1 py-1 rounded-lg text-[10px] font-semibold border ${
+                        Math.abs(textY - pos.y) <= 8
+                          ? 'bg-blue-600 border-blue-600 text-white'
+                          : isDark
+                            ? 'bg-zinc-800 border-zinc-700 text-zinc-300'
+                            : 'bg-zinc-100 border-zinc-300 text-zinc-700'
+                      }`}
+                    >
+                      {pos.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between text-[11px] font-semibold text-zinc-400 mb-1">
+                  <span>Ukuran</span>
+                  <span>{fontSize}px</span>
+                </div>
+                <input
+                  type="range"
+                  min={24}
+                  max={84}
+                  value={fontSize}
+                  onChange={(e) => setFontSize(Number(e.target.value))}
+                  className="w-full accent-blue-600"
+                />
+              </div>
+            </div>
+
+            {/* Warna Teks */}
+            <div>
+              <p className="text-[11px] font-semibold text-zinc-400 mb-1.5">Warna Teks</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                {TEXT_COLORS.map((col) => (
+                  <button
+                    key={col}
+                    type="button"
+                    onClick={() => setTextColor(col)}
+                    style={{ backgroundColor: col }}
+                    className={`w-7 h-7 rounded-full border-2 transition ${
+                      textColor === col ? 'border-blue-500 scale-110' : 'border-zinc-500/40'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Garis Tepi, Gaya Huruf & Bentuk */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-[11px] font-semibold text-zinc-400 mb-1">Garis Tepi</p>
+                <div className="flex items-center gap-1">
+                  {OUTLINE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setOutline(opt.id)}
+                      className={`flex-1 py-1 rounded-lg text-[10px] font-semibold border ${
+                        outline === opt.id
+                          ? 'bg-blue-600 border-blue-600 text-white'
+                          : isDark
+                            ? 'bg-zinc-800 border-zinc-700 text-zinc-300'
+                            : 'bg-zinc-100 border-zinc-300 text-zinc-700'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-[11px] font-semibold text-zinc-400 mb-1">Gaya Huruf</p>
+                <div className="flex items-center gap-1">
+                  {[
+                    { id: 'bold', label: 'Tebal' },
+                    { id: 'normal', label: 'Biasa' },
+                    { id: 'italic', label: 'Miring' },
+                  ].map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => setFontStyle(st.id)}
+                      className={`flex-1 py-1 rounded-lg text-[10px] font-semibold border ${
+                        fontStyle === st.id
+                          ? 'bg-blue-600 border-blue-600 text-white'
+                          : isDark
+                            ? 'bg-zinc-800 border-zinc-700 text-zinc-300'
+                            : 'bg-zinc-100 border-zinc-300 text-zinc-700'
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-zinc-400 mb-1">Bentuk Stiker</p>
               <div className="flex items-center gap-1.5">
                 {[
                   { id: 'rounded', label: 'Kotak Bulat' },
@@ -249,12 +553,12 @@ export default function StickerStudio({
                     key={opt.id}
                     type="button"
                     onClick={() => setShape(opt.id)}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-semibold border transition ${
+                    className={`flex-1 py-1.5 rounded-xl text-[11px] font-semibold border transition ${
                       shape === opt.id
                         ? 'bg-blue-600 border-blue-600 text-white'
                         : isDark
                           ? 'bg-zinc-800 border-zinc-700 text-zinc-300'
-                          : 'bg-white border-zinc-300 text-zinc-700'
+                          : 'bg-zinc-100 border-zinc-300 text-zinc-700'
                     }`}
                   >
                     {opt.label}
@@ -262,25 +566,36 @@ export default function StickerStudio({
                 ))}
               </div>
             </div>
-          </div>
 
-          <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={resetDraft}
-              className="px-3 py-1.5 rounded-xl text-xs font-semibold text-zinc-400 hover:text-red-500 flex items-center gap-1"
-            >
-              <X className="w-3.5 h-3.5" /> Batal
-            </button>
-            <button
-              type="button"
-              disabled={creating}
-              onClick={handleSaveSticker}
-              className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-semibold flex items-center gap-1.5"
-            >
-              {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-              Simpan Stiker
-            </button>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => inputRef.current?.click()}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold border ${
+                  isDark ? 'border-zinc-700 text-zinc-300' : 'border-zinc-300 text-zinc-700'
+                }`}
+              >
+                Ganti Foto
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={resetDraft}
+                  className="px-3 py-2 rounded-xl text-xs font-semibold text-zinc-400 hover:text-red-500"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={creating}
+                  onClick={handleSaveSticker}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold flex items-center gap-1.5"
+                >
+                  {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                  Simpan Stiker
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -325,21 +640,19 @@ export default function StickerStudio({
                   className="w-full h-full object-contain rounded-xl"
                 />
               </button>
-              {(
-                <button
-                  type="button"
-                  disabled={deletingId === st.id}
-                  onClick={() => handleDeleteSticker(st)}
-                  title="Hapus stiker"
-                  className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/65 text-white hover:bg-red-600 transition"
-                >
-                  {deletingId === st.id ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-3 h-3" />
-                  )}
-                </button>
-              )}
+              <button
+                type="button"
+                disabled={deletingId === st.id}
+                onClick={() => handleDeleteSticker(st)}
+                title="Hapus stiker"
+                className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/65 text-white hover:bg-red-600 transition"
+              >
+                {deletingId === st.id ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Trash2 className="w-3 h-3" />
+                )}
+              </button>
             </div>
           ))}
         </div>

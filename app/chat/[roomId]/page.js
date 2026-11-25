@@ -39,6 +39,8 @@ import {
   ExternalLink,
   Palette,
   Star,
+  Radio,
+  Square,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useTheme } from '../../../lib/useTheme';
@@ -121,6 +123,7 @@ const snippetOf = (msg) => {
   if (msg.media_type === 'gif') return '🎞️ GIF';
   if (msg.media_type === 'album') return msg.content ? `🖼️ ${msg.content}` : '🖼️ Album Foto';
   if (msg.media_type === 'location') return '📍 Lokasi';
+  if (msg.media_type === 'live_location') return '🟢 Lokasi Live';
   return msg.content || '';
 };
 
@@ -167,6 +170,11 @@ function ChatRoomContent() {
   const [myStickers, setMyStickers] = useState([]);
   const [pendingAlbum, setPendingAlbum] = useState([]);
   const [sendingLocation, setSendingLocation] = useState(false);
+  const [showLocationModal, setShowLocationModal] = useState(false);
+  const [activeLiveLoc, setActiveLiveLoc] = useState(null);
+  const [nowTick, setNowTick] = useState(Date.now());
+  const liveWatchIdRef = useRef(null);
+  const lastLivePushRef = useRef(0);
   const albumAddInputRef = useRef(null);
   const [drawerTab, setDrawerTab] = useState('sticker');
   const [showMoreEmojis, setShowMoreEmojis] = useState(false);
@@ -281,7 +289,7 @@ function ChatRoomContent() {
       const { data: initialMsgs } = await supabase
         .from('messages')
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
         )
         .eq('room_id', roomId)
         .order('created_at', { ascending: true });
@@ -562,7 +570,7 @@ function ChatRoomContent() {
           media_urls: uploadedUrls,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
         )
         .single();
 
@@ -807,7 +815,7 @@ function ChatRoomContent() {
           is_view_once: false,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
         )
         .single();
       if (error) throw error;
@@ -856,7 +864,7 @@ function ChatRoomContent() {
           is_view_once: false,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
         )
         .single();
       if (error) throw error;
@@ -877,34 +885,147 @@ function ChatRoomContent() {
     }
   };
 
-  // Berbagi Lokasi GPS
-  const handleSendLocation = () => {
+  // Pastikan laci Stiker/GIF selalu tertutup saat masuk/keluar room atau ganti halaman
+  useEffect(() => {
+    setShowStickerDrawer(false);
+    const onHide = () => setShowStickerDrawer(false);
+    window.addEventListener('pagehide', onHide);
+    window.addEventListener('popstate', onHide);
+    return () => {
+      window.removeEventListener('pagehide', onHide);
+      window.removeEventListener('popstate', onHide);
+      setShowStickerDrawer(false);
+    };
+  }, [roomId]);
+
+  // Timer ringan untuk memperbarui sisa waktu Lokasi Live
+  useEffect(() => {
+    const hasLive = messages.some(
+      (m) =>
+        m.media_type === 'live_location' &&
+        m.location_live_until &&
+        new Date(m.location_live_until).getTime() > Date.now()
+    );
+    if (!hasLive && !activeLiveLoc) return;
+    const id = setInterval(() => setNowTick(Date.now()), 10000);
+    return () => clearInterval(id);
+  }, [messages, activeLiveLoc]);
+
+  // Hentikan watchPosition saat keluar halaman
+  useEffect(() => {
+    return () => {
+      if (liveWatchIdRef.current != null && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.clearWatch(liveWatchIdRef.current);
+        liveWatchIdRef.current = null;
+      }
+    };
+  }, []);
+
+  const stopLiveLocation = useCallback(async (messageId) => {
+    if (liveWatchIdRef.current != null && typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.clearWatch(liveWatchIdRef.current);
+      liveWatchIdRef.current = null;
+    }
+    const targetId = messageId || activeLiveLoc?.messageId;
+    setActiveLiveLoc(null);
+    if (!targetId) return;
+    const nowIso = new Date().toISOString();
+    await supabase
+      .from('messages')
+      .update({ location_live_until: nowIso, location_updated_at: nowIso })
+      .eq('id', targetId);
+  }, [activeLiveLoc]);
+
+  const startWatchForLiveMessage = useCallback(
+    (messageId, untilMs) => {
+      if (typeof navigator === 'undefined' || !navigator.geolocation) return;
+      if (liveWatchIdRef.current != null) {
+        navigator.geolocation.clearWatch(liveWatchIdRef.current);
+      }
+      setActiveLiveLoc({ messageId, untilMs });
+      lastLivePushRef.current = Date.now();
+
+      liveWatchIdRef.current = navigator.geolocation.watchPosition(
+        async (pos) => {
+          const now = Date.now();
+          if (now >= untilMs) {
+            stopLiveLocation(messageId);
+            return;
+          }
+          if (now - lastLivePushRef.current < 5000) return;
+          lastLivePushRef.current = now;
+          const lat = Number(pos.coords.latitude.toFixed(6));
+          const lng = Number(pos.coords.longitude.toFixed(6));
+          await supabase
+            .from('messages')
+            .update({
+              location_lat: lat,
+              location_lng: lng,
+              location_updated_at: new Date().toISOString(),
+            })
+            .eq('id', messageId);
+        },
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 }
+      );
+    },
+    [stopLiveLocation]
+  );
+
+  // Resume otomatis bila ada Lokasi Live milik sendiri yang masih aktif di room ini
+  useEffect(() => {
+    if (!currentUser?.id || activeLiveLoc) return;
+    const liveMine = [...messages]
+      .reverse()
+      .find(
+        (m) =>
+          m.sender_id === currentUser.id &&
+          m.media_type === 'live_location' &&
+          !m.is_deleted &&
+          m.location_live_until &&
+          new Date(m.location_live_until).getTime() > Date.now()
+      );
+    if (liveMine) {
+      startWatchForLiveMessage(liveMine.id, new Date(liveMine.location_live_until).getTime());
+    }
+  }, [messages, currentUser?.id, activeLiveLoc, startWatchForLiveMessage]);
+
+  // Berbagi Lokasi Statis ATAU Lokasi Live (durationMin = 0 untuk statis)
+  const handleSendLocation = (durationMin = 0) => {
     if (!currentUser || sendingLocation || iBlockedOther || otherBlockedMe) return;
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       alert('Browser ini tidak mendukung fitur lokasi GPS.');
       return;
     }
+    setShowLocationModal(false);
     setSendingLocation(true);
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         try {
           const lat = Number(pos.coords.latitude.toFixed(6));
           const lng = Number(pos.coords.longitude.toFixed(6));
+          const isLive = durationMin > 0;
+          const nowIso = new Date().toISOString();
+          const untilMs = isLive ? Date.now() + durationMin * 60 * 1000 : null;
+          const untilIso = untilMs ? new Date(untilMs).toISOString() : null;
+
           const { data, error } = await supabase
             .from('messages')
             .insert({
               room_id: roomId,
               sender_id: currentUser.id,
-              content: `Lokasi (${lat}, ${lng})`,
+              content: isLive ? `Lokasi Live (${durationMin} menit)` : `Lokasi (${lat}, ${lng})`,
               media_url: '',
-              media_type: 'location',
+              media_type: isLive ? 'live_location' : 'location',
               location_lat: lat,
               location_lng: lng,
+              location_live_until: untilIso,
+              location_updated_at: nowIso,
               reply_to_id: replyingTo?.id || null,
               is_view_once: false,
             })
             .select(
-              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
+              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
             )
             .single();
           if (error) throw error;
@@ -912,10 +1033,13 @@ function ChatRoomContent() {
           if (data) {
             setMessages((prev) => (prev.some((m) => m.id === data.id) ? prev : [...prev, data]));
             scrollToBottom();
+            if (isLive && untilMs) {
+              startWatchForLiveMessage(data.id, untilMs);
+            }
             sendPushNotification({
               roomId,
               title: myProfile?.display_name || myProfile?.username || 'Pesan Baru',
-              body: '📍 Berbagi lokasi',
+              body: isLive ? `🟢 Berbagi lokasi live (${durationMin} mnt)` : '📍 Berbagi lokasi',
               url: `/chat/${roomId}`,
               tag: `room-${roomId}`,
             });
@@ -930,7 +1054,7 @@ function ChatRoomContent() {
         setSendingLocation(false);
         alert('Izin lokasi ditolak atau GPS sedang mati. Aktifkan lokasi di HP kamu.');
       },
-      { enableHighAccuracy: true, timeout: 12000 }
+      { enableHighAccuracy: true, timeout: 15000 }
     );
   };
 
@@ -1051,7 +1175,7 @@ function ChatRoomContent() {
           is_forwarded: true,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
         )
         .single();
       if (error) throw error;
@@ -1216,7 +1340,7 @@ function ChatRoomContent() {
               reply_to_id: replyingTo?.id || null,
             })
             .select(
-              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
+              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng, location_live_until, location_updated_at'
             )
             .single();
           if (msgErr) throw msgErr;
@@ -1507,6 +1631,24 @@ function ChatRoomContent() {
       )}
 
       {/* Area Pesan */}
+            {activeLiveLoc && activeLiveLoc.untilMs > nowTick && (
+        <div className="px-3 py-2 bg-emerald-600 text-white text-xs flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-white animate-pulse shrink-0" />
+            <span className="font-semibold truncate">
+              Berbagi lokasi live · sisa {Math.max(1, Math.ceil((activeLiveLoc.untilMs - nowTick) / 60000))} mnt
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => stopLiveLocation(activeLiveLoc.messageId)}
+            className="px-2.5 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-[11px] font-bold shrink-0"
+          >
+            Berhenti
+          </button>
+        </div>
+      )}
+
       <main style={getWallpaperStyle(appearance, isDark)} className="flex-1 overflow-y-auto px-3 py-4 space-y-2.5">
         {messages.length === 0 ? (
           <div className="h-full flex items-center justify-center text-center">
@@ -1759,46 +1901,109 @@ function ChatRoomContent() {
                           </div>
                         )}
 
-                        {/* Berbagi Lokasi GPS */}
-                        {msg.media_type === 'location' && msg.location_lat != null && msg.location_lng != null && (
-                          <a
-                            href={`https://www.google.com/maps?q=${msg.location_lat},${msg.location_lng}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className={`mb-1.5 block p-3 rounded-xl border min-w-[215px] transition ${
-                              isMine
-                                ? 'bg-black/15 border-white/20 hover:bg-black/25 text-white'
-                                : isDark
-                                  ? 'bg-zinc-900/80 border-zinc-700 hover:bg-zinc-900 text-zinc-100'
-                                  : 'bg-zinc-50 border-zinc-200 hover:bg-zinc-100 text-zinc-900'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5">
+                        {/* Berbagi Lokasi GPS (Statis & Live Real-Time) */}
+                        {(msg.media_type === 'location' || msg.media_type === 'live_location') &&
+                          msg.location_lat != null &&
+                          msg.location_lng != null && (() => {
+                            const lat = Number(msg.location_lat);
+                            const lng = Number(msg.location_lng);
+                            const isLiveType = msg.media_type === 'live_location';
+                            const untilMs = msg.location_live_until ? new Date(msg.location_live_until).getTime() : 0;
+                            const isLiveActive = isLiveType && untilMs > nowTick;
+                            const remMin = isLiveActive ? Math.max(1, Math.ceil((untilMs - nowTick) / 60000)) : 0;
+                            const pad = 0.004;
+                            const osmUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${lng - pad}%2C${lat - pad}%2C${lng + pad}%2C${lat + pad}&layer=mapnik&marker=${lat}%2C${lng}`;
+                            return (
                               <div
-                                className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                                  isMine ? 'bg-white/20 text-white' : 'bg-emerald-500/15 text-emerald-500'
+                                onClick={(e) => e.stopPropagation()}
+                                className={`mb-1.5 rounded-xl border overflow-hidden min-w-[230px] max-w-[265px] ${
+                                  isMine
+                                    ? 'bg-black/15 border-white/20 text-white'
+                                    : isDark
+                                      ? 'bg-zinc-900/90 border-zinc-700 text-zinc-100'
+                                      : 'bg-zinc-50 border-zinc-200 text-zinc-900'
                                 }`}
                               >
-                                <Navigation className="w-4 h-4" />
+                                <div className="relative w-full h-28 bg-zinc-800 overflow-hidden">
+                                  <iframe
+                                    title="Peta Lokasi"
+                                    src={osmUrl}
+                                    loading="lazy"
+                                    className="w-full h-full border-0 pointer-events-none"
+                                  />
+                                  {isLiveType && (
+                                    <span
+                                      className={`absolute top-2 left-2 px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 shadow ${
+                                        isLiveActive ? 'bg-emerald-600 text-white' : 'bg-zinc-800/90 text-zinc-200'
+                                      }`}
+                                    >
+                                      {isLiveActive && (
+                                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                                      )}
+                                      {isLiveActive ? `LIVE · ${remMin} mnt` : 'Live berakhir'}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="p-2.5 space-y-2">
+                                  <div className="flex items-center gap-2">
+                                    <div
+                                      className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                                        isLiveActive
+                                          ? 'bg-emerald-500 text-white'
+                                          : isMine
+                                            ? 'bg-white/20 text-white'
+                                            : 'bg-emerald-500/15 text-emerald-500'
+                                      }`}
+                                    >
+                                      {isLiveType ? <Radio className="w-4 h-4" /> : <Navigation className="w-4 h-4" />}
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-xs font-bold leading-tight truncate">
+                                        {isLiveType
+                                          ? isLiveActive
+                                            ? 'Lokasi Live Aktif'
+                                            : 'Lokasi Live Selesai'
+                                          : 'Lokasi Dibagikan'}
+                                      </p>
+                                      <p className={`text-[10px] truncate ${isMine ? 'text-blue-100/85' : 'text-zinc-400'}`}>
+                                        {msg.location_updated_at && isLiveType
+                                          ? `Update ${new Date(msg.location_updated_at).toLocaleTimeString('id-ID', {
+                                              hour: '2-digit',
+                                              minute: '2-digit',
+                                              second: '2-digit',
+                                            })}`
+                                          : `${lat.toFixed(5)}, ${lng.toFixed(5)}`}
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5">
+                                    <a
+                                      href={`https://www.google.com/maps?q=${lat},${lng}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={`flex-1 py-1.5 px-2 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition ${
+                                        isMine
+                                          ? 'bg-white/20 hover:bg-white/30 text-white'
+                                          : 'bg-blue-600 hover:bg-blue-700 text-white'
+                                      }`}
+                                    >
+                                      <MapPin className="w-3 h-3" /> Google Maps
+                                    </a>
+                                    {isMine && isLiveActive && (
+                                      <button
+                                        type="button"
+                                        onClick={() => stopLiveLocation(msg.id)}
+                                        className="py-1.5 px-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-[11px] font-semibold flex items-center gap-1 shrink-0"
+                                      >
+                                        <Square className="w-3 h-3 fill-current" /> Stop
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
-                              <div className="min-w-0 flex-1">
-                                <p className="text-xs font-bold leading-tight">Lokasi Dibagikan</p>
-                                <p className={`text-[10px] truncate mt-0.5 ${isMine ? 'text-blue-100/85' : 'text-zinc-400'}`}>
-                                  {Number(msg.location_lat).toFixed(5)}, {Number(msg.location_lng).toFixed(5)}
-                                </p>
-                              </div>
-                              <ExternalLink className="w-3.5 h-3.5 opacity-75 shrink-0" />
-                            </div>
-                            <div
-                              className={`mt-2 pt-2 border-t text-[11px] font-semibold flex items-center justify-center gap-1 ${
-                                isMine ? 'border-white/15 text-white' : 'border-zinc-500/20 text-blue-600'
-                              }`}
-                            >
-                              <MapPin className="w-3.5 h-3.5" /> Buka di Google Maps
-                            </div>
-                          </a>
-                        )}
+                            );
+                          })()}
 
                         {/* Video Normal + Tombol Perbesar & Simpan */}
                         {msg.media_type === 'video' && msg.media_url && (
@@ -1917,7 +2122,7 @@ function ChatRoomContent() {
                           </div>
                         )}
 
-                        {msg.content && msg.media_type !== 'location' && (
+                        {msg.content && msg.media_type !== 'location' && msg.media_type !== 'live_location' && (
                           <>
                             <p className="whitespace-pre-wrap leading-relaxed">
                               {renderHighlightedText(msg.content)}
@@ -2177,32 +2382,47 @@ function ChatRoomContent() {
             isDark ? 'bg-[#121215] border-zinc-800' : 'bg-white border-zinc-200'
           }`}
         >
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setDrawerTab('sticker')}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
+                  drawerTab === 'sticker'
+                    ? 'bg-blue-600 text-white'
+                    : isDark
+                      ? 'bg-zinc-800 text-zinc-300'
+                      : 'bg-zinc-100 text-zinc-700'
+                }`}
+              >
+                Stiker
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrawerTab('gif')}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
+                  drawerTab === 'gif'
+                    ? 'bg-blue-600 text-white'
+                    : isDark
+                      ? 'bg-zinc-800 text-zinc-300'
+                      : 'bg-zinc-100 text-zinc-700'
+                }`}
+              >
+                GIF
+              </button>
+            </div>
             <button
               type="button"
-              onClick={() => setDrawerTab('sticker')}
-              className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
-                drawerTab === 'sticker'
-                  ? 'bg-blue-600 text-white'
-                  : isDark
-                    ? 'bg-zinc-800 text-zinc-300'
-                    : 'bg-zinc-100 text-zinc-700'
+              onClick={() => setShowStickerDrawer(false)}
+              title="Tutup panel stiker & GIF"
+              aria-label="Tutup"
+              className={`p-1.5 rounded-xl transition ${
+                isDark
+                  ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+                  : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
               }`}
             >
-              Stiker
-            </button>
-            <button
-              type="button"
-              onClick={() => setDrawerTab('gif')}
-              className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
-                drawerTab === 'gif'
-                  ? 'bg-blue-600 text-white'
-                  : isDark
-                    ? 'bg-zinc-800 text-zinc-300'
-                    : 'bg-zinc-100 text-zinc-700'
-              }`}
-            >
-              GIF
+              <X className="w-4 h-4" />
             </button>
           </div>
           {drawerTab === 'sticker' ? (
@@ -2324,7 +2544,10 @@ function ChatRoomContent() {
               </button>
               <button
                 type="button"
-                onClick={handleSendLocation}
+                onClick={() => {
+                  setShowStickerDrawer(false);
+                  setShowLocationModal(true);
+                }}
                 disabled={sending || uploadingVoice || sendingLocation}
                 title="Berbagi Lokasi GPS"
                 className={`p-2.5 rounded-xl border transition shrink-0 ${
@@ -2345,6 +2568,7 @@ function ChatRoomContent() {
           <textarea
             rows={1}
             value={text}
+            onFocus={() => setShowStickerDrawer(false)}
             onChange={(e) => handleTextChange(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
@@ -2639,6 +2863,86 @@ function ChatRoomContent() {
           canSave={zoomViewer.canSave !== false}
           onClose={() => setZoomViewer(null)}
         />
+      )}
+
+      {/* Modal Pilihan Berbagi Lokasi (Saat Ini & Live Real-Time) */}
+      {showLocationModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={() => setShowLocationModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full sm:max-w-sm rounded-t-3xl sm:rounded-2xl p-5 shadow-xl space-y-3.5 ${
+              isDark ? 'bg-[#121215] text-zinc-100 border border-zinc-800' : 'bg-white text-zinc-900'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="font-bold text-sm flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-emerald-500" /> Bagikan Lokasi
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowLocationModal(false)}
+                className={`p-1.5 rounded-lg ${isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'}`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => handleSendLocation(0)}
+              className={`w-full p-3.5 rounded-2xl border text-left flex items-center gap-3 transition ${
+                isDark
+                  ? 'bg-zinc-900 border-zinc-800 hover:border-blue-500'
+                  : 'bg-zinc-50 border-zinc-200 hover:border-blue-500'
+              }`}
+            >
+              <div className="w-10 h-10 rounded-xl bg-blue-600/15 text-blue-600 flex items-center justify-center shrink-0">
+                <Navigation className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold">Kirim Lokasi Saat Ini</p>
+                <p className="text-[11px] text-zinc-400">Titik lokasi statis saat ini saja</p>
+              </div>
+            </button>
+
+            <div
+              className={`p-3.5 rounded-2xl border space-y-2.5 ${
+                isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-500 flex items-center justify-center shrink-0">
+                  <Radio className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold">Berbagi Lokasi Live (Real-Time)</p>
+                  <p className="text-[11px] text-zinc-400">
+                    Posisi ikut bergerak otomatis saat kamu bepergian
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { min: 15, label: '15 Menit' },
+                  { min: 60, label: '1 Jam' },
+                  { min: 480, label: '8 Jam' },
+                ].map((opt) => (
+                  <button
+                    key={opt.min}
+                    type="button"
+                    onClick={() => handleSendLocation(opt.min)}
+                    className="py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal Wallpaper & Warna Aksen Chat */}

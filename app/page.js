@@ -82,6 +82,7 @@ const formatPreviewText = (msg) => {
   if (msg.media_type === 'gif') return '🎞️ GIF';
   if (msg.media_type === 'album') return msg.content ? `🖼️ ${msg.content}` : '🖼️ Album Foto';
   if (msg.media_type === 'location') return '📍 Lokasi';
+  if (msg.media_type === 'live_location') return '🟢 Lokasi Live';
   return msg.content || '';
 };
 
