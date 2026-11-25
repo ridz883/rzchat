@@ -172,6 +172,7 @@ function ChatRoomContent() {
   const [infoModalMsg, setInfoModalMsg] = useState(null);
   const [mentionQuery, setMentionQuery] = useState(null);
   const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
+  const inlineVideoRefs = useRef({});
   const [showSearch, setShowSearch] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [searchIdx, setSearchIdx] = useState(0);
@@ -1611,7 +1612,7 @@ function ChatRoomContent() {
 
   return (
     <div
-      className={`w-full h-[100dvh] flex flex-col transition-colors ${
+      className={`fixed inset-0 w-full h-[100dvh] flex flex-col overflow-hidden overscroll-none transition-colors ${
         isDark ? 'bg-[#09090B] text-zinc-100' : 'bg-zinc-100 text-zinc-900'
       }`}
     >
@@ -1730,15 +1731,17 @@ function ChatRoomContent() {
           >
             <Search className="w-4 h-4" />
           </button>
-          <button
-            onClick={() => setShowPollModal(true)}
-            title="Buat Polling / Voting"
-            className={`p-2 rounded-xl transition ${
-              isDark ? 'hover:bg-zinc-800 text-zinc-200' : 'hover:bg-zinc-100 text-zinc-700'
-            }`}
-          >
-            <BarChart3 className="w-4 h-4" />
-          </button>
+          {roomMeta?.is_group === true && (
+            <button
+              onClick={() => setShowPollModal(true)}
+              title="Buat Polling / Voting"
+              className={`p-2 rounded-xl transition ${
+                isDark ? 'hover:bg-zinc-800 text-zinc-200' : 'hover:bg-zinc-100 text-zinc-700'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4" />
+            </button>
+          )}
           <button
             onClick={() => setShowAppearanceModal(true)}
             title="Wallpaper & Warna Chat"
@@ -2121,27 +2124,53 @@ function ChatRoomContent() {
                           />
                         )}
 
-                        {/* Stiker Kustom */}
+                        {/* Stiker Kustom (Ukuran Seragam + Tag Stiker) */}
                         {msg.media_type === 'sticker' && msg.media_url && (
-                          <div onClick={(e) => e.stopPropagation()} className="py-0.5">
-                            <img
-                              src={msg.media_url}
-                              alt="Stiker"
-                              loading="lazy"
-                              className="w-36 h-36 object-contain rounded-xl"
-                            />
+                          <div onClick={(e) => e.stopPropagation()} className="py-0.5 flex flex-col items-start gap-1">
+                            <div className="w-40 h-40 rounded-xl overflow-hidden flex items-center justify-center bg-black/5">
+                              <img
+                                src={msg.media_url}
+                                alt="Stiker"
+                                loading="lazy"
+                                className="w-full h-full object-contain"
+                              />
+                            </div>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide uppercase ${
+                                isMine
+                                  ? 'bg-white/20 text-white'
+                                  : isDark
+                                    ? 'bg-zinc-700/80 text-zinc-200'
+                                    : 'bg-zinc-200/80 text-zinc-700'
+                              }`}
+                            >
+                              Stiker
+                            </span>
                           </div>
                         )}
 
-                        {/* GIF Animasi */}
+                        {/* GIF Animasi (Ukuran Seragam dengan Stiker + Tag GIF) */}
                         {msg.media_type === 'gif' && msg.media_url && (
-                          <div onClick={(e) => e.stopPropagation()} className="mb-1 overflow-hidden rounded-xl">
-                            <img
-                              src={msg.media_url}
-                              alt="GIF"
-                              loading="lazy"
-                              className="max-h-56 w-auto max-w-full rounded-xl object-contain"
-                            />
+                          <div onClick={(e) => e.stopPropagation()} className="py-0.5 flex flex-col items-start gap-1">
+                            <div className="w-40 h-40 rounded-xl overflow-hidden bg-black/15 flex items-center justify-center">
+                              <img
+                                src={msg.media_url}
+                                alt="GIF"
+                                loading="lazy"
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide uppercase ${
+                                isMine
+                                  ? 'bg-white/20 text-white'
+                                  : isDark
+                                    ? 'bg-zinc-700/80 text-zinc-200'
+                                    : 'bg-zinc-200/80 text-zinc-700'
+                              }`}
+                            >
+                              GIF
+                            </span>
                           </div>
                         )}
 
@@ -2254,6 +2283,10 @@ function ChatRoomContent() {
                           <div onClick={(e) => e.stopPropagation()} className="mb-1.5 space-y-1.5">
                             <div className="relative">
                               <video
+                                ref={(el) => {
+                                  if (el) inlineVideoRefs.current[msg.id] = el;
+                                  else delete inlineVideoRefs.current[msg.id];
+                                }}
                                 src={msg.media_url}
                                 controls
                                 playsInline
@@ -2262,9 +2295,19 @@ function ChatRoomContent() {
                               />
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setVideoViewer({ src: msg.media_url, fileName: msg.file_name || '' })
-                                }
+                                onClick={() => {
+                                  const vEl = inlineVideoRefs.current[msg.id];
+                                  const t = vEl ? vEl.currentTime || 0 : 0;
+                                  const wasPlaying = vEl ? !vEl.paused : true;
+                                  if (vEl) vEl.pause();
+                                  setVideoViewer({
+                                    msgId: msg.id,
+                                    src: msg.media_url,
+                                    fileName: msg.file_name || '',
+                                    startTime: t,
+                                    autoPlay: wasPlaying,
+                                  });
+                                }}
                                 title="Perbesar Video"
                                 className="absolute top-2 right-2 p-1.5 rounded-full bg-black/65 hover:bg-black/85 text-white backdrop-blur-xs transition"
                               >
@@ -2274,9 +2317,19 @@ function ChatRoomContent() {
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setVideoViewer({ src: msg.media_url, fileName: msg.file_name || '' })
-                                }
+                                onClick={() => {
+                                  const vEl = inlineVideoRefs.current[msg.id];
+                                  const t = vEl ? vEl.currentTime || 0 : 0;
+                                  const wasPlaying = vEl ? !vEl.paused : true;
+                                  if (vEl) vEl.pause();
+                                  setVideoViewer({
+                                    msgId: msg.id,
+                                    src: msg.media_url,
+                                    fileName: msg.file_name || '',
+                                    startTime: t,
+                                    autoPlay: wasPlaying,
+                                  });
+                                }}
                                 className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${
                                   isMine
                                     ? 'bg-white/15 hover:bg-white/25 text-white'
@@ -3388,6 +3441,16 @@ function ChatRoomContent() {
         <VideoLightbox
           src={videoViewer.src}
           fileName={videoViewer.fileName}
+          startTime={videoViewer.startTime || 0}
+          autoPlay={videoViewer.autoPlay !== false}
+          onSyncTime={(t) => {
+            const vEl = videoViewer.msgId ? inlineVideoRefs.current[videoViewer.msgId] : null;
+            if (vEl && Number.isFinite(t)) {
+              try {
+                vEl.currentTime = t;
+              } catch {}
+            }
+          }}
           onClose={() => setVideoViewer(null)}
         />
       )}

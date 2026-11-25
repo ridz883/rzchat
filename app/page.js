@@ -43,7 +43,7 @@ import {
 import Avatar from '../components/Avatar';
 import GroupCreateModal from '../components/GroupCreateModal';
 import StatusSection from '../components/StatusSection';
-import { Users, CircleDot, Star as FavStar } from 'lucide-react';
+import { Users, CircleDot, Star as FavStar, Trash2 } from 'lucide-react';
 import ZoomableLightbox from '../components/ZoomableLightbox';
 import { ANDROID_IMAGE_ACCEPT } from '../lib/security';
 
@@ -55,16 +55,18 @@ const compressImageToDataUrl = (file) =>
       const img = new Image();
       img.onerror = () => reject(new Error('File bukan gambar yang valid.'));
       img.onload = () => {
-        const size = 640;
+        const size = 1080;
         const canvas = document.createElement('canvas');
         canvas.width = size;
         canvas.height = size;
         const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         const minSide = Math.min(img.width, img.height);
         const sx = (img.width - minSide) / 2;
         const sy = (img.height - minSide) / 2;
         ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
-        resolve(canvas.toDataURL('image/jpeg', 0.85));
+        resolve(canvas.toDataURL('image/jpeg', 0.92));
       };
       img.src = event.target.result;
     };
@@ -96,6 +98,7 @@ export default function HomePage() {
   const callCtx = useCall();
   const onlineUsers = callCtx?.onlineUsers || new Set();
   const fileInputRef = useRef(null);
+  const tabSwipeRef = useRef({ x: 0, y: 0, active: false });
 
   const [activeTab, setActiveTab] = useState('chat');
   const [user, setUser] = useState(null);
@@ -836,7 +839,34 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Konten Utama */}
+      {/* Konten Utama (Dukung Geser Kiri/Kanan Antar Menu) */}
+      <div
+        onTouchStart={(e) => {
+          if (e.touches.length !== 1) return;
+          tabSwipeRef.current = {
+            x: e.touches[0].clientX,
+            y: e.touches[0].clientY,
+            active: true,
+          };
+        }}
+        onTouchEnd={(e) => {
+          if (!tabSwipeRef.current.active || e.changedTouches.length !== 1) return;
+          tabSwipeRef.current.active = false;
+          const dx = e.changedTouches[0].clientX - tabSwipeRef.current.x;
+          const dy = e.changedTouches[0].clientY - tabSwipeRef.current.y;
+          if (Math.abs(dx) < 65 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+          const order = ['chat', 'status', 'calls', 'account'];
+          const curIdx = order.indexOf(activeTab);
+          if (curIdx === -1) return;
+          const nextIdx = dx < 0 ? Math.min(order.length - 1, curIdx + 1) : Math.max(0, curIdx - 1);
+          const nextTab = order[nextIdx];
+          if (nextTab !== activeTab) {
+            setActiveTab(nextTab);
+            if (nextTab === 'calls' && user?.id) loadCallLogs(user.id);
+          }
+        }}
+        className="flex-1 flex flex-col overflow-hidden"
+      >
       {activeTab === 'chat' ? (
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className={`p-3 border-b shrink-0 space-y-2.5 ${isDark ? 'border-zinc-800' : 'border-zinc-200'}`}>
@@ -1067,6 +1097,35 @@ export default function HomePage() {
                         <Archive className="w-4 h-4 text-zinc-500" /> Arsipkan Obrolan
                       </>
                     )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const target = roomMenuTarget;
+                      setRoomMenuTarget(null);
+                      const label =
+                        target.otherUser?.display_name || target.otherUser?.username || 'obrolan ini';
+                      const ok = window.confirm(
+                        target.isGroup
+                          ? `Keluar dan hapus grup "${label}" dari daftar chat?`
+                          : `Hapus obrolan dengan "${label}" dari daftar chat?`
+                      );
+                      if (!ok) return;
+                      const { error } = await supabase.rpc('leave_or_delete_direct_room', {
+                        p_room_id: String(target.roomId),
+                      });
+                      if (error) {
+                        alert('Gagal menghapus obrolan: ' + error.message);
+                        return;
+                      }
+                      setRooms((prev) => prev.filter((r) => String(r.roomId) !== String(target.roomId)));
+                    }}
+                    className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-3 text-sm font-medium text-red-500 ${
+                      isDark ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'
+                    }`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    {roomMenuTarget.isGroup ? 'Keluar & Hapus Grup' : 'Hapus Obrolan'}
                   </button>
                 </div>
               </div>
@@ -1722,6 +1781,8 @@ export default function HomePage() {
           </div>
         </div>
       )}
+
+      </div>
 
       {showCreateGroup && (
         <GroupCreateModal

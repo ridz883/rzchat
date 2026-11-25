@@ -200,7 +200,7 @@ export default function ZoomableLightbox({
               transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})`,
               transformOrigin: 'center center',
             }}
-            className="w-full h-full max-w-[100vw] max-h-[84vh] object-contain transition-transform duration-75 will-change-transform"
+            className="w-full h-full max-w-[100vw] max-h-[84vh] object-contain [image-rendering:high-quality] transition-transform duration-75 will-change-transform"
           />
         ) : (
           <div className="w-64 h-64 rounded-full bg-blue-600 text-white flex items-center justify-center text-7xl font-bold shadow-2xl">
