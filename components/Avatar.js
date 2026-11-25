@@ -10,13 +10,14 @@ export default function Avatar({ src, name, size = 'md', className = '' }) {
   };
 
   const sizeClass = sizes[size] || sizes.md;
-  const initial = (name || 'U').trim().charAt(0).toUpperCase();
+  const safeName = typeof name === 'string' ? name.trim() : '';
+  const initial = (safeName || 'U').charAt(0).toUpperCase();
 
   if (src) {
     return (
       <img
         src={src}
-        alt={name || 'Avatar'}
+        alt={safeName || 'Avatar'}
         className={`${sizeClass} rounded-full object-cover shrink-0 border border-black/10 ${className}`}
       />
     );
