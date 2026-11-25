@@ -660,6 +660,44 @@ export default function HomePage() {
     }
   };
 
+  
+  const openStarredMessages = async () => {
+    setShowStarredModal(true);
+    if (!user?.id) return;
+    setLoadingStarred(true);
+    try {
+      const { data: stars } = await supabase
+        .from('starred_messages')
+        .select('id, room_id, message_id, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      const ids = (stars || []).map((s) => s.message_id).filter(Boolean);
+      if (ids.length === 0) {
+        setStarredList([]);
+      } else {
+        const { data: msgs } = await supabase
+          .from('messages')
+          .select('id, content, media_type, file_name, is_deleted, is_view_once, created_at')
+          .in('id', ids);
+        const mMap = {};
+        (msgs || []).forEach((m) => { mMap[m.id] = m; });
+        setStarredList((stars || []).filter((s) => mMap[s.message_id]).map((s) => ({ ...s, message: mMap[s.message_id] })));
+      }
+    } finally {
+      setLoadingStarred(false);
+    }
+  };
+
+  const handleUnblockUser = async (targetUserId) => {
+    if (!user?.id || !targetUserId) return;
+    await supabase
+      .from('blocked_users')
+      .delete()
+      .eq('blocker_id', user.id)
+      .eq('blocked_id', targetUserId);
+    setBlockedList((prev) => prev.filter((u) => u.id !== targetUserId));
+  };
+
   const handleSaveProfile = async (e) => {
     e.preventDefault();
     if (!user) return;
