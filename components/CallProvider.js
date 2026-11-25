@@ -51,6 +51,30 @@ export default function CallProvider({ children }) {
   const callStateRef = useRef('idle');
   const callInfoRef = useRef(null);
   const outgoingChannelsRef = useRef(new Map());
+  const callConnectedAtRef = useRef(null);
+  const callFinalizedRef = useRef(false);
+
+  const finalizeCallLog = useCallback(async (info, status, durationOverride) => {
+    if (!info?.callId || callFinalizedRef.current) return;
+    callFinalizedRef.current = true;
+    const dur =
+      typeof durationOverride === 'number'
+        ? durationOverride
+        : callConnectedAtRef.current
+          ? Math.max(1, Math.round((Date.now() - callConnectedAtRef.current) / 1000))
+          : 0;
+    const finalStatus = callConnectedAtRef.current ? 'completed' : status;
+    callConnectedAtRef.current = null;
+    try {
+      await supabase
+        .from('call_logs')
+        .update({ status: finalStatus, duration_sec: dur })
+        .eq('call_id', info.callId);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('rzchat-call-log-updated'));
+      }
+    } catch {}
+  }, []);
   const ringTimerRef = useRef(null);
   const callTimerRef = useRef(null);
   const timeoutRef = useRef(null);
@@ -269,6 +293,7 @@ export default function CallProvider({ children }) {
           const hasDtls =
             Boolean(pc.localDescription?.sdp?.includes('a=fingerprint:')) &&
             Boolean(pc.remoteDescription?.sdp?.includes('a=fingerprint:'));
+          if (!callConnectedAtRef.current) callConnectedAtRef.current = Date.now();
           setCallState('connected');
           setCallStatusText(hasDtls ? 'Terhubung · DTLS-SRTP' : 'Terhubung');
           if (remoteAudioRef.current) {
@@ -334,6 +359,25 @@ export default function CallProvider({ children }) {
         });
 
         const callId = `${authUser.id}-${Date.now()}`;
+        callConnectedAtRef.current = null;
+        callFinalizedRef.current = false;
+        supabase
+          .from('call_logs')
+          .insert({
+            call_id: callId,
+            room_id: String(roomId),
+            caller_id: authUser.id,
+            callee_id: targetUser.id,
+            call_type: callType,
+            status: 'cancelled',
+            duration_sec: 0,
+          })
+          .then(() => {
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new Event('rzchat-call-log-updated'));
+            }
+          })
+          .catch(() => {});
         localStreamRef.current = stream;
         setLocalStream(stream);
         setCallInfo({ callId, roomId, callType, peer: targetUser, isCaller: true });
@@ -386,6 +430,7 @@ export default function CallProvider({ children }) {
         // Timeout 45 detik jika tidak diangkat
         timeoutRef.current = setTimeout(() => {
           if (callStateRef.current === 'calling') {
+            finalizeCallLog({ callId }, 'missed', 0);
             sendSignal(targetUser.id, {
               type: 'end',
               callId,
@@ -479,6 +524,9 @@ export default function CallProvider({ children }) {
     const info = callInfoRef.current;
     if (info?.peer?.id && authUser) {
       const sigType = callStateRef.current === 'ringing' ? 'reject' : 'end';
+      const fallbackStatus =
+        sigType === 'reject' ? 'rejected' : info.isCaller ? 'cancelled' : 'missed';
+      finalizeCallLog(info, fallbackStatus);
       sendSignal(info.peer.id, {
         type: sigType,
         callId: info.callId,
@@ -486,7 +534,7 @@ export default function CallProvider({ children }) {
       }).catch(() => {});
     }
     cleanupCall();
-  }, [authUser, sendSignal, cleanupCall]);
+  }, [authUser, sendSignal, cleanupCall, finalizeCallLog]);
 
   const toggleMute = () => {
     if (!localStreamRef.current) return;
@@ -507,32 +555,65 @@ export default function CallProvider({ children }) {
   };
 
   const switchCamera = async () => {
-    if (!localStreamRef.current || !pcRef.current) return;
+    if (!localStreamRef.current) return;
     const nextMode = facingMode === 'user' ? 'environment' : 'user';
+    const oldTrack = localStreamRef.current.getVideoTracks()[0];
+    const oldDeviceId = oldTrack?.getSettings?.()?.deviceId;
+
     try {
-      const newVideoStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: nextMode, width: { ideal: 640 }, height: { ideal: 480 } },
-      });
-      const newTrack = newVideoStream.getVideoTracks()[0];
-      const oldTrack = localStreamRef.current.getVideoTracks()[0];
-
-      const sender = pcRef.current
-        .getSenders()
-        .find((s) => s.track && s.track.kind === 'video');
-      if (sender) {
-        await sender.replaceTrack(newTrack);
-      }
-
+      // Wajib stop track kamera lama DULU agar hardware kamera Android/MIUI tidak terkunci
       if (oldTrack) {
         localStreamRef.current.removeTrack(oldTrack);
         oldTrack.stop();
       }
+
+      let newVideoStream = null;
+      try {
+        newVideoStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: nextMode }, width: { ideal: 640 }, height: { ideal: 480 } },
+        });
+      } catch {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+        const altDevice = videoInputs.find((d) => d.deviceId && d.deviceId !== oldDeviceId);
+        if (altDevice) {
+          newVideoStream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: { exact: altDevice.deviceId }, width: { ideal: 640 }, height: { ideal: 480 } },
+          });
+        } else {
+          newVideoStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: nextMode, width: { ideal: 640 }, height: { ideal: 480 } },
+          });
+        }
+      }
+
+      const newTrack = newVideoStream.getVideoTracks()[0];
+      if (!newTrack) throw new Error('Kamera baru tidak tersedia');
+
+      if (pcRef.current) {
+        let sender = pcRef.current.getSenders().find((s) => s.track?.kind === 'video');
+        if (!sender && pcRef.current.getTransceivers) {
+          const vt = pcRef.current
+            .getTransceivers()
+            .find((t) => t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video');
+          sender = vt?.sender;
+        }
+        if (sender) {
+          await sender.replaceTrack(newTrack);
+        }
+      }
+
       localStreamRef.current.addTrack(newTrack);
-      setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+      const refreshed = new MediaStream(localStreamRef.current.getTracks());
+      setLocalStream(refreshed);
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = refreshed;
+        localVideoRef.current.play().catch(() => {});
+      }
       setFacingMode(nextMode);
       setIsCamOff(false);
     } catch {
-      alert('Gagal mengganti kamera.');
+      alert('Gagal mengganti kamera. Pastikan perangkat punya kamera depan & belakang.');
     }
   };
 
@@ -623,6 +704,8 @@ export default function CallProvider({ children }) {
             }).catch(() => {});
             return;
           }
+          callConnectedAtRef.current = null;
+          callFinalizedRef.current = false;
           incomingOfferRef.current = payload.offer;
           pendingIceRef.current = [];
           setCallInfo({
@@ -678,6 +761,10 @@ export default function CallProvider({ children }) {
             (!payload.fromId || payload.fromId === callInfoRef.current.peer?.id)
           ) {
             stopTone();
+            finalizeCallLog(
+              callInfoRef.current,
+              payload.type === 'reject' || payload.type === 'busy' ? 'rejected' : 'missed'
+            );
             setCallStatusText(
               payload.type === 'busy'
                 ? 'Pengguna sedang sibuk'

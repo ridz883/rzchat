@@ -24,6 +24,12 @@ import {
   ArchiveRestore,
   MoreVertical,
   ArrowLeft,
+  Phone,
+  Video,
+  PhoneIncoming,
+  PhoneOutgoing,
+  PhoneMissed,
+  Smile,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/useTheme';
@@ -34,6 +40,8 @@ import {
   unsubscribeUserFromPush,
 } from '../lib/pushClient';
 import Avatar from '../components/Avatar';
+import ZoomableLightbox from '../components/ZoomableLightbox';
+import StickerStudio from '../components/StickerStudio';
 
 const compressImageToDataUrl = (file) =>
   new Promise((resolve, reject) => {
@@ -69,6 +77,9 @@ const formatPreviewText = (msg) => {
   if (msg.media_type === 'image') return msg.content ? `📷 ${msg.content}` : '📷 Foto';
   if (msg.media_type === 'video') return msg.content ? `🎬 ${msg.content}` : '🎬 Video';
   if (msg.media_type === 'file') return msg.file_name ? `📄 ${msg.file_name}` : '📄 Dokumen';
+  if (msg.media_type === 'sticker') return '🎨 Stiker';
+  if (msg.media_type === 'album') return msg.content ? `🖼️ ${msg.content}` : '🖼️ Album Foto';
+  if (msg.media_type === 'location') return '📍 Lokasi';
   return msg.content || '';
 };
 
@@ -92,6 +103,12 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [roomMenuTarget, setRoomMenuTarget] = useState(null);
+  const [zoomAvatar, setZoomAvatar] = useState(null);
+  const [stickers, setStickers] = useState([]);
+  const [callLogs, setCallLogs] = useState([]);
+  const [loadingCalls, setLoadingCalls] = useState(false);
+  const [pwaReady, setPwaReady] = useState(false);
+  const [isPwaInstalled, setIsPwaInstalled] = useState(false);
 
   // Push Notification state
   const [pushState, setPushState] = useState({ supported: false, enabled: false });
@@ -269,6 +286,115 @@ export default function HomePage() {
       p_is_pinned: nextArchived ? false : undefined,
     });
     if (error && user?.id) loadRooms(user.id);
+  };
+
+  const loadStickers = useCallback(async (userId) => {
+    const { data } = await supabase
+      .from('stickers')
+      .select('id, user_id, image_url, label, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    setStickers(data || []);
+  }, []);
+
+  const loadCallLogs = useCallback(async (userId) => {
+    setLoadingCalls(true);
+    try {
+      const { data: logs } = await supabase
+        .from('call_logs')
+        .select('id, call_id, room_id, caller_id, callee_id, call_type, status, duration_sec, created_at')
+        .or(`caller_id.eq.${userId},callee_id.eq.${userId}`)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (!logs || logs.length === 0) {
+        setCallLogs([]);
+        return;
+      }
+
+      const peerIds = [...new Set(logs.map((l) => (l.caller_id === userId ? l.callee_id : l.caller_id)))];
+      const { data: profs } = await supabase
+        .from('profiles')
+        .select('id, username, display_name, avatar_url')
+        .in('id', peerIds);
+      const pMap = {};
+      (profs || []).forEach((p) => {
+        pMap[p.id] = p;
+      });
+
+      setCallLogs(
+        logs.map((l) => {
+          const isOutgoing = l.caller_id === userId;
+          const peerId = isOutgoing ? l.callee_id : l.caller_id;
+          return {
+            ...l,
+            isOutgoing,
+            peer: pMap[peerId] || { id: peerId, username: 'pengguna', display_name: 'Pengguna', avatar_url: '' },
+          };
+        })
+      );
+    } finally {
+      setLoadingCalls(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const standalone =
+      window.matchMedia?.('(display-mode: standalone)')?.matches ||
+      window.navigator?.standalone === true;
+    setIsPwaInstalled(Boolean(standalone));
+    setPwaReady(Boolean(window.__rzchatInstallPrompt));
+
+    const onReady = () => setPwaReady(Boolean(window.__rzchatInstallPrompt));
+    const onInstalled = () => {
+      setIsPwaInstalled(true);
+      setPwaReady(false);
+    };
+    window.addEventListener('rzchat-pwa-ready', onReady);
+    window.addEventListener('rzchat-pwa-installed', onInstalled);
+    return () => {
+      window.removeEventListener('rzchat-pwa-ready', onReady);
+      window.removeEventListener('rzchat-pwa-installed', onInstalled);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    loadStickers(user.id);
+    loadCallLogs(user.id);
+    const onLogUpdate = () => loadCallLogs(user.id);
+    window.addEventListener('rzchat-call-log-updated', onLogUpdate);
+    return () => window.removeEventListener('rzchat-call-log-updated', onLogUpdate);
+  }, [user?.id, loadStickers, loadCallLogs]);
+
+  const handleSmartPwaInstall = async () => {
+    if (isPwaInstalled) {
+      alert('rzchat sudah terpasang sebagai aplikasi di HP kamu.');
+      return;
+    }
+    const promptEvent = typeof window !== 'undefined' ? window.__rzchatInstallPrompt : null;
+    if (promptEvent) {
+      promptEvent.prompt();
+      const { outcome } = await promptEvent.userChoice;
+      if (outcome === 'accepted') {
+        window.__rzchatInstallPrompt = null;
+        setPwaReady(false);
+        setIsPwaInstalled(true);
+      }
+      return;
+    }
+    alert(
+      'Browser saat ini belum menampilkan pop-up install otomatis. Buka rzzchat.vercel.app di Google Chrome, lalu ketuk menu titik tiga (⋮) → "Install aplikasi" atau "Tambahkan ke layar utama".'
+    );
+  };
+
+  const formatCallDur = (sec) => {
+    const s = Number(sec) || 0;
+    if (s <= 0) return '';
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}:${r < 10 ? '0' : ''}${r}`;
   };
 
   const archivedRooms = rooms.filter((r) => r.isArchived);
@@ -819,7 +945,20 @@ export default function HomePage() {
                         isDark ? 'hover:bg-zinc-900' : 'hover:bg-zinc-50'
                       }`}
                     >
-                      <div className="relative shrink-0">
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setZoomAvatar({
+                            url: item.otherUser.avatar_url || '',
+                            title: item.otherUser.display_name || item.otherUser.username,
+                            subtitle: `@${item.otherUser.username}`,
+                          });
+                        }}
+                        title="Ketuk untuk perbesar foto profil"
+                        className="relative shrink-0 cursor-zoom-in"
+                      >
                         <Avatar
                           src={item.otherUser.avatar_url}
                           name={item.otherUser.display_name || item.otherUser.username}
@@ -916,18 +1055,162 @@ export default function HomePage() {
             )}
           </main>
         </div>
+      ) : activeTab === 'calls' ? (
+        /* TAB RIWAYAT PANGGILAN */
+        <main className="flex-1 overflow-y-auto">
+          {loadingCalls && callLogs.length === 0 ? (
+            <div className="h-full flex items-center justify-center">
+              <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+            </div>
+          ) : callLogs.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-center px-6">
+              <Phone className={`w-10 h-10 mb-3 ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`} />
+              <p className="font-medium text-sm mb-1">Belum ada riwayat panggilan</p>
+              <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                Panggilan suara & video call kamu akan tercatat otomatis di sini.
+              </p>
+            </div>
+          ) : (
+            <div className={`divide-y ${isDark ? 'divide-zinc-800/80' : 'divide-zinc-100'}`}>
+              {callLogs.map((log) => {
+                const isMissed = !log.isOutgoing && (log.status === 'missed' || log.status === 'cancelled');
+                const statusLabel =
+                  log.status === 'completed'
+                    ? `Terhubung ${formatCallDur(log.duration_sec)}`
+                    : log.status === 'rejected'
+                      ? 'Ditolak'
+                      : log.isOutgoing
+                        ? 'Tidak dijawab'
+                        : 'Tak terjawab';
+                return (
+                  <div
+                    key={log.id}
+                    className={`px-4 py-3.5 flex items-center justify-between gap-3 ${
+                      isDark ? 'hover:bg-zinc-900' : 'hover:bg-zinc-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setZoomAvatar({
+                            url: log.peer.avatar_url || '',
+                            title: log.peer.display_name || log.peer.username,
+                            subtitle: `@${log.peer.username}`,
+                          })
+                        }
+                        className="shrink-0"
+                      >
+                        <Avatar
+                          src={log.peer.avatar_url}
+                          name={log.peer.display_name || log.peer.username}
+                          size="md"
+                        />
+                      </button>
+                      <div className="min-w-0">
+                        <p className={`text-sm font-semibold truncate ${isMissed ? 'text-red-500' : ''}`}>
+                          {log.peer.display_name || log.peer.username}
+                        </p>
+                        <div className="flex items-center gap-1.5 text-xs text-zinc-400 mt-0.5">
+                          {isMissed ? (
+                            <PhoneMissed className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                          ) : log.isOutgoing ? (
+                            <PhoneOutgoing className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                          ) : (
+                            <PhoneIncoming className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                          )}
+                          <span className="truncate">
+                            {log.call_type === 'video' ? 'Video' : 'Suara'} · {statusLabel}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-zinc-500 mt-0.5">
+                          {new Date(log.created_at).toLocaleString('id-ID', {
+                            day: 'numeric',
+                            month: 'short',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          callCtx?.startCall({
+                            roomId: log.room_id,
+                            targetUser: log.peer,
+                            callType: 'audio',
+                          })
+                        }
+                        title="Telepon balik"
+                        className={`p-2 rounded-xl transition ${
+                          isDark ? 'hover:bg-zinc-800 text-blue-400' : 'hover:bg-blue-50 text-blue-600'
+                        }`}
+                      >
+                        <Phone className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          callCtx?.startCall({
+                            roomId: log.room_id,
+                            targetUser: log.peer,
+                            callType: 'video',
+                          })
+                        }
+                        title="Video call balik"
+                        className={`p-2 rounded-xl transition ${
+                          isDark ? 'hover:bg-zinc-800 text-blue-400' : 'hover:bg-blue-50 text-blue-600'
+                        }`}
+                      >
+                        <Video className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </main>
+      ) : activeTab === 'stickers' ? (
+        /* TAB STIKER KUSTOM */
+        <main className="flex-1 overflow-y-auto px-4 py-5">
+          <div className="max-w-lg mx-auto pb-8">
+            <StickerStudio
+              userId={user?.id}
+              isDark={isDark}
+              stickers={stickers}
+              onStickersChange={setStickers}
+            />
+          </div>
+        </main>
       ) : (
         /* TAB AKUN, NOTIFIKASI PUSH & BLOKIR */
         <main className="flex-1 overflow-y-auto px-4 py-5">
           <div className="max-w-lg mx-auto space-y-5 pb-8">
             <div className="flex flex-col items-center text-center">
               <div className="relative">
-                <Avatar
-                  src={editAvatar}
-                  name={editDisplayName || editUsername}
-                  size="xl"
-                  className="shadow-sm"
-                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    setZoomAvatar({
+                      url: editAvatar || '',
+                      title: editDisplayName || editUsername || 'Foto Profil',
+                      subtitle: editUsername ? `@${editUsername}` : '',
+                    })
+                  }
+                  title="Ketuk untuk perbesar foto profil"
+                  className="rounded-full cursor-zoom-in"
+                >
+                  <Avatar
+                    src={editAvatar}
+                    name={editDisplayName || editUsername}
+                    size="xl"
+                    className="shadow-sm"
+                  />
+                </button>
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
@@ -1101,16 +1384,24 @@ export default function HomePage() {
                 <div className="min-w-0">
                   <p className="text-xs font-bold">Install Aplikasi (PWA)</p>
                   <p className={`text-[11px] truncate ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                    Pasang rzchat ke layar utama HP
+                    {isPwaInstalled
+                      ? 'Sudah terpasang sebagai aplikasi'
+                      : pwaReady
+                        ? 'Siap dipasang langsung dengan 1 ketukan'
+                        : 'Pasang rzchat ke layar utama HP'}
                   </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={handleTriggerPwaInstall}
-                className="px-3 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-semibold shrink-0"
+                onClick={handleSmartPwaInstall}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 ${
+                  isPwaInstalled
+                    ? 'bg-emerald-500/15 text-emerald-500'
+                    : 'bg-blue-600 text-white'
+                }`}
               >
-                Install
+                {isPwaInstalled ? 'Terpasang' : 'Install'}
               </button>
             </div>
 
@@ -1155,9 +1446,20 @@ export default function HomePage() {
         </main>
       )}
 
-      {/* Bottom Nav */}
+      {zoomAvatar && (
+        <ZoomableLightbox
+          images={zoomAvatar.url ? [zoomAvatar.url] : []}
+          title={zoomAvatar.title}
+          subtitle={zoomAvatar.subtitle}
+          fallbackInitial={zoomAvatar.title}
+          canSave={Boolean(zoomAvatar.url)}
+          onClose={() => setZoomAvatar(null)}
+        />
+      )}
+
+      {/* Bottom Nav (4 Tab: Chat, Panggilan, Stiker, Akun) */}
       <nav
-        className={`grid grid-cols-2 border-t shrink-0 ${
+        className={`grid grid-cols-4 border-t shrink-0 ${
           isDark ? 'bg-[#09090B] border-zinc-800' : 'bg-white border-zinc-200'
         }`}
       >
@@ -1180,6 +1482,40 @@ export default function HomePage() {
             )}
           </div>
           <span className="text-[11px] font-semibold">Chat</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('calls');
+            if (user?.id) loadCallLogs(user.id);
+          }}
+          className={`py-2.5 flex flex-col items-center justify-center gap-1 transition ${
+            activeTab === 'calls'
+              ? 'text-blue-600'
+              : isDark
+                ? 'text-zinc-400'
+                : 'text-zinc-500'
+          }`}
+        >
+          <Phone className="w-5 h-5" />
+          <span className="text-[11px] font-semibold">Panggilan</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('stickers');
+            if (user?.id) loadStickers(user.id);
+          }}
+          className={`py-2.5 flex flex-col items-center justify-center gap-1 transition ${
+            activeTab === 'stickers'
+              ? 'text-blue-600'
+              : isDark
+                ? 'text-zinc-400'
+                : 'text-zinc-500'
+          }`}
+        >
+          <Smile className="w-5 h-5" />
+          <span className="text-[11px] font-semibold">Stiker</span>
         </button>
 
         <button

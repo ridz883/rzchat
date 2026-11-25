@@ -11,8 +11,23 @@ export default function PwaManager() {
     if (typeof window === 'undefined') return;
 
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
     }
+
+    const isStandalone =
+      window.matchMedia?.('(display-mode: standalone)')?.matches ||
+      window.navigator?.standalone === true;
+    if (isStandalone) return;
+
+    if (window.__rzchatInstallPrompt) {
+      setDeferredPrompt(window.__rzchatInstallPrompt);
+    }
+
+    const onReady = () => {
+      if (window.__rzchatInstallPrompt) {
+        setDeferredPrompt(window.__rzchatInstallPrompt);
+      }
+    };
 
     const onBeforeInstall = (e) => {
       e.preventDefault();
@@ -25,19 +40,24 @@ export default function PwaManager() {
       setDeferredPrompt(null);
     };
 
+    window.addEventListener('rzchat-pwa-ready', onReady);
+    window.addEventListener('rzchat-pwa-installed', onInstalled);
     window.addEventListener('beforeinstallprompt', onBeforeInstall);
     window.addEventListener('appinstalled', onInstalled);
 
     return () => {
+      window.removeEventListener('rzchat-pwa-ready', onReady);
+      window.removeEventListener('rzchat-pwa-installed', onInstalled);
       window.removeEventListener('beforeinstallprompt', onBeforeInstall);
       window.removeEventListener('appinstalled', onInstalled);
     };
   }, []);
 
   const handleInstall = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
+    const promptEvent = deferredPrompt || window.__rzchatInstallPrompt;
+    if (!promptEvent) return;
+    promptEvent.prompt();
+    const { outcome } = await promptEvent.userChoice;
     if (outcome === 'accepted') {
       setDeferredPrompt(null);
       window.__rzchatInstallPrompt = null;

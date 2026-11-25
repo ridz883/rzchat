@@ -24,9 +24,25 @@ export const viewport = {
   themeColor: '#2563eb',
 };
 
+const pwaBootScript = `
+  window.__rzchatInstallPrompt = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    window.__rzchatInstallPrompt = e;
+    window.dispatchEvent(new Event('rzchat-pwa-ready'));
+  });
+  window.addEventListener('appinstalled', function () {
+    window.__rzchatInstallPrompt = null;
+    window.dispatchEvent(new Event('rzchat-pwa-installed'));
+  });
+`;
+
 export default function RootLayout({ children }) {
   return (
     <html lang="id">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: pwaBootScript }} />
+      </head>
       <body className="m-0 p-0 w-full min-h-[100dvh] overflow-x-hidden antialiased">
         <CallProvider>{children}</CallProvider>
         <PwaManager />

@@ -32,6 +32,11 @@ import {
   FileText,
   ChevronUp,
   ChevronDown,
+  Maximize2,
+  Smile,
+  Navigation,
+  Plus,
+  ExternalLink,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useTheme } from '../../../lib/useTheme';
@@ -39,6 +44,10 @@ import { useCall } from '../../../components/CallProvider';
 import { sendPushNotification } from '../../../lib/pushClient';
 import Avatar from '../../../components/Avatar';
 import LinkPreviewCard from '../../../components/LinkPreviewCard';
+import VoiceNotePlayer from '../../../components/VoiceNotePlayer';
+import ZoomableLightbox from '../../../components/ZoomableLightbox';
+import VideoLightbox from '../../../components/VideoLightbox';
+import StickerStudio from '../../../components/StickerStudio';
 import {
   ANDROID_MEDIA_ACCEPT,
   sanitizeText,
@@ -87,6 +96,9 @@ const snippetOf = (msg) => {
   if (msg.media_type === 'image') return msg.content ? `📷 ${msg.content}` : '📷 Foto';
   if (msg.media_type === 'video') return msg.content ? `🎬 ${msg.content}` : '🎬 Video';
   if (msg.media_type === 'file') return msg.file_name ? `📄 ${msg.file_name}` : '📄 Dokumen';
+  if (msg.media_type === 'sticker') return '🎨 Stiker';
+  if (msg.media_type === 'album') return msg.content ? `🖼️ ${msg.content}` : '🖼️ Album Foto';
+  if (msg.media_type === 'location') return '📍 Lokasi';
   return msg.content || '';
 };
 
@@ -127,6 +139,13 @@ function ChatRoomContent() {
   const [loadingForwardRooms, setLoadingForwardRooms] = useState(false);
   const [forwardingToRoomId, setForwardingToRoomId] = useState(null);
   const [savingMediaId, setSavingMediaId] = useState(null);
+  const [zoomViewer, setZoomViewer] = useState(null);
+  const [videoViewer, setVideoViewer] = useState(null);
+  const [showStickerDrawer, setShowStickerDrawer] = useState(false);
+  const [myStickers, setMyStickers] = useState([]);
+  const [pendingAlbum, setPendingAlbum] = useState([]);
+  const [sendingLocation, setSendingLocation] = useState(false);
+  const albumAddInputRef = useRef(null);
 
   // Media + View Once (1x Lihat)
   const [pendingMedia, setPendingMedia] = useState(null);
@@ -232,7 +251,7 @@ function ChatRoomContent() {
       const { data: initialMsgs } = await supabase
         .from('messages')
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
         )
         .eq('room_id', roomId)
         .order('created_at', { ascending: true });
@@ -325,12 +344,33 @@ function ChatRoomContent() {
     emitTyping(val.trim().length > 0);
   };
 
-  // Pilih foto, video, audio, atau dokumen lewat Android System File Picker
+  // Pilih foto/video/dokumen tunggal ATAU banyak foto sekaligus (Album Multi-Foto maks 10)
   const handleMediaSelect = (e) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!file) return;
+    if (files.length === 0) return;
 
+    if (files.length > 1) {
+      const validPhotos = [];
+      for (const f of files.slice(0, 10)) {
+        const chk = validateUploadFile(f, 25);
+        if (chk.valid && chk.category === 'image') {
+          validPhotos.push({ file: f, previewUrl: URL.createObjectURL(f) });
+        }
+      }
+      if (validPhotos.length === 0) {
+        alert('Pilih minimal 1 foto valid untuk membuat album.');
+        return;
+      }
+      if (pendingMedia?.previewUrl) URL.revokeObjectURL(pendingMedia.previewUrl);
+      pendingAlbum.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+      setPendingMedia(null);
+      setIsViewOnce(false);
+      setPendingAlbum(validPhotos);
+      return;
+    }
+
+    const file = files[0];
     const check = validateUploadFile(file, 25);
     if (!check.valid) {
       alert(check.error);
@@ -339,14 +379,56 @@ function ChatRoomContent() {
 
     const type = check.category;
     if (pendingMedia?.previewUrl) URL.revokeObjectURL(pendingMedia.previewUrl);
+    pendingAlbum.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+    setPendingAlbum([]);
     const previewUrl = type === 'image' || type === 'video' ? URL.createObjectURL(file) : '';
     setPendingMedia({ file, type, previewUrl });
     setIsViewOnce(false);
   };
 
+  // Tambah foto ke album (memungkinkan stacking foto 1 per 1 di HP Android)
+  const handleAddAlbumPhotos = (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length === 0) return;
+
+    const base =
+      pendingAlbum.length > 0
+        ? [...pendingAlbum]
+        : pendingMedia?.type === 'image'
+          ? [{ file: pendingMedia.file, previewUrl: pendingMedia.previewUrl }]
+          : [];
+
+    for (const f of files) {
+      if (base.length >= 10) break;
+      const chk = validateUploadFile(f, 25);
+      if (chk.valid && chk.category === 'image') {
+        base.push({ file: f, previewUrl: URL.createObjectURL(f) });
+      }
+    }
+
+    if (base.length >= 2) {
+      setPendingMedia(null);
+      setIsViewOnce(false);
+      setPendingAlbum(base);
+    } else if (base.length === 1) {
+      setPendingMedia({ file: base[0].file, type: 'image', previewUrl: base[0].previewUrl });
+    }
+  };
+
+  const removeAlbumPhotoAt = (idx) => {
+    setPendingAlbum((prev) => {
+      const target = prev[idx];
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((_, i) => i !== idx);
+    });
+  };
+
   const clearPendingMedia = () => {
     if (pendingMedia?.previewUrl) URL.revokeObjectURL(pendingMedia.previewUrl);
+    pendingAlbum.forEach((p) => URL.revokeObjectURL(p.previewUrl));
     setPendingMedia(null);
+    setPendingAlbum([]);
     setIsViewOnce(false);
   };
 
@@ -384,18 +466,38 @@ function ChatRoomContent() {
       return;
     }
 
-    if ((!content && !pendingMedia) || !currentUser || sending) return;
+    if ((!content && !pendingMedia && pendingAlbum.length === 0) || !currentUser || sending) return;
 
     setSending(true);
     emitTyping(false);
     let uploadedUrl = '';
+    let uploadedUrls = [];
     let uploadedType = '';
     const sendViewOnce = Boolean(
       pendingMedia && (pendingMedia.type === 'image' || pendingMedia.type === 'video') && isViewOnce
     );
 
     try {
-      if (pendingMedia) {
+      if (pendingAlbum.length > 0) {
+        for (let i = 0; i < pendingAlbum.length; i++) {
+          const item = pendingAlbum[i];
+          const ext = (item.file.name.split('.').pop() || 'jpg')
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, '');
+          const filePath = `${roomId}/${currentUser.id}-${Date.now()}-${i}.${ext}`;
+          const { error: upErr } = await supabase.storage
+            .from('chat-media')
+            .upload(filePath, item.file, {
+              contentType: item.file.type || 'image/jpeg',
+              upsert: false,
+            });
+          if (upErr) throw upErr;
+          const { data: uData } = supabase.storage.from('chat-media').getPublicUrl(filePath);
+          uploadedUrls.push(uData.publicUrl);
+        }
+        uploadedUrl = uploadedUrls[0] || '';
+        uploadedType = 'album';
+      } else if (pendingMedia) {
         const ext = (pendingMedia.file.name.split('.').pop() || 'bin')
           .toLowerCase()
           .replace(/[^a-z0-9]/g, '');
@@ -426,9 +528,10 @@ function ChatRoomContent() {
           is_view_once: sendViewOnce,
           file_name: pendingMedia ? sanitizeText(pendingMedia.file.name, 160) : '',
           file_size: pendingMedia ? pendingMedia.file.size : 0,
+          media_urls: uploadedUrls,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
         )
         .single();
 
@@ -460,7 +563,9 @@ function ChatRoomContent() {
                 ? `📄 ${pendingMedia?.file?.name || 'Mengirim dokumen'}`
                 : uploadedType === 'audio'
                   ? '🎵 Mengirim audio'
-                  : content;
+                  : uploadedType === 'album'
+                    ? `🖼️ Mengirim ${uploadedUrls.length} foto`
+                    : content;
 
         sendPushNotification({
           roomId,
@@ -571,6 +676,112 @@ function ChatRoomContent() {
           ? { ...m, media_url: '', view_once_opened_at: m.view_once_opened_at || new Date().toISOString() }
           : m
       )
+    );
+  };
+
+  // Muat stiker milik user
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    supabase
+      .from('stickers')
+      .select('id, user_id, image_url, label, created_at')
+      .eq('user_id', currentUser.id)
+      .order('created_at', { ascending: false })
+      .then(({ data }) => setMyStickers(data || []));
+  }, [currentUser?.id]);
+
+  // Kirim Stiker Kustom
+  const handleSendSticker = async (sticker) => {
+    if (!sticker?.image_url || !currentUser || iBlockedOther || otherBlockedMe) return;
+    setShowStickerDrawer(false);
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .insert({
+          room_id: roomId,
+          sender_id: currentUser.id,
+          content: '',
+          media_url: sticker.image_url,
+          media_type: 'sticker',
+          reply_to_id: replyingTo?.id || null,
+          is_view_once: false,
+        })
+        .select(
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
+        )
+        .single();
+      if (error) throw error;
+      setReplyingTo(null);
+      if (data) {
+        setMessages((prev) => (prev.some((m) => m.id === data.id) ? prev : [...prev, data]));
+        scrollToBottom();
+        sendPushNotification({
+          roomId,
+          title: myProfile?.display_name || myProfile?.username || 'Pesan Baru',
+          body: '🎨 Mengirim stiker',
+          url: `/chat/${roomId}`,
+          tag: `room-${roomId}`,
+        });
+      }
+    } catch (err) {
+      alert('Gagal mengirim stiker: ' + (err.message || 'Terjadi kesalahan'));
+    }
+  };
+
+  // Berbagi Lokasi GPS
+  const handleSendLocation = () => {
+    if (!currentUser || sendingLocation || iBlockedOther || otherBlockedMe) return;
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      alert('Browser ini tidak mendukung fitur lokasi GPS.');
+      return;
+    }
+    setSendingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const lat = Number(pos.coords.latitude.toFixed(6));
+          const lng = Number(pos.coords.longitude.toFixed(6));
+          const { data, error } = await supabase
+            .from('messages')
+            .insert({
+              room_id: roomId,
+              sender_id: currentUser.id,
+              content: `Lokasi (${lat}, ${lng})`,
+              media_url: '',
+              media_type: 'location',
+              location_lat: lat,
+              location_lng: lng,
+              reply_to_id: replyingTo?.id || null,
+              is_view_once: false,
+            })
+            .select(
+              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
+            )
+            .single();
+          if (error) throw error;
+          setReplyingTo(null);
+          if (data) {
+            setMessages((prev) => (prev.some((m) => m.id === data.id) ? prev : [...prev, data]));
+            scrollToBottom();
+            sendPushNotification({
+              roomId,
+              title: myProfile?.display_name || myProfile?.username || 'Pesan Baru',
+              body: '📍 Berbagi lokasi',
+              url: `/chat/${roomId}`,
+              tag: `room-${roomId}`,
+            });
+          }
+        } catch (err) {
+          alert('Gagal mengirim lokasi: ' + (err.message || 'Error'));
+        } finally {
+          setSendingLocation(false);
+        }
+      },
+      () => {
+        setSendingLocation(false);
+        alert('Izin lokasi ditolak atau GPS sedang mati. Aktifkan lokasi di HP kamu.');
+      },
+      { enableHighAccuracy: true, timeout: 12000 }
     );
   };
 
@@ -691,7 +902,7 @@ function ChatRoomContent() {
           is_forwarded: true,
         })
         .select(
-          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size'
+          'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
         )
         .single();
       if (error) throw error;
@@ -856,7 +1067,7 @@ function ChatRoomContent() {
               reply_to_id: replyingTo?.id || null,
             })
             .select(
-              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size'
+              'id, room_id, sender_id, content, created_at, read_at, media_url, media_type, reply_to_id, edited_at, is_deleted, reactions, is_view_once, view_once_opened_at, is_pinned, pinned_at, pinned_by, is_forwarded, file_name, file_size, media_urls, location_lat, location_lng'
             )
             .single();
           if (msgErr) throw msgErr;
@@ -1289,14 +1500,19 @@ function ChatRoomContent() {
                       </div>
                     ) : (
                       <>
-                        {/* Foto Normal + Tombol Simpan */}
+                        {/* Foto Normal + Zoom & Tombol Simpan */}
                         {msg.media_type === 'image' && msg.media_url && (
                           <div className="relative mb-1.5 group">
                             <button
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setLightboxImage(msg.media_url);
+                                setZoomViewer({
+                                  images: [msg.media_url],
+                                  initialIndex: 0,
+                                  title: isMine ? 'Anda' : otherUser?.display_name || otherUser?.username,
+                                  canSave: true,
+                                });
                               }}
                               className="block overflow-hidden rounded-xl"
                             >
@@ -1324,42 +1540,159 @@ function ChatRoomContent() {
                           </div>
                         )}
 
-                        {/* Video Normal + Tombol Simpan */}
-                        {msg.media_type === 'video' && msg.media_url && (
-                          <div onClick={(e) => e.stopPropagation()} className="mb-1.5 space-y-1">
-                            <video
-                              src={msg.media_url}
-                              controls
-                              playsInline
-                              preload="metadata"
-                              className="max-h-64 w-full rounded-xl bg-black"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleSaveMedia(msg)}
-                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${
-                                isMine
-                                  ? 'bg-white/15 hover:bg-white/25 text-white'
-                                  : isDark
-                                    ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
-                                    : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
-                              }`}
-                            >
-                              {savingMediaId === msg.id ? (
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                              ) : (
-                                <Download className="w-3 h-3" />
-                              )}
-                              Simpan Video
-                            </button>
+                        {/* Album Multi-Foto (Grid Kolase) */}
+                        {msg.media_type === 'album' && Array.isArray(msg.media_urls) && msg.media_urls.length > 0 && (
+                          <div className="mb-1.5 grid grid-cols-2 gap-1 w-[236px] max-w-full">
+                            {msg.media_urls.slice(0, 4).map((url, idx) => {
+                              const extra = msg.media_urls.length - 4;
+                              return (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setZoomViewer({
+                                      images: msg.media_urls,
+                                      initialIndex: idx,
+                                      title: `Album (${msg.media_urls.length} Foto)`,
+                                      canSave: true,
+                                    });
+                                  }}
+                                  className="relative aspect-square rounded-xl overflow-hidden bg-black/15"
+                                >
+                                  <img
+                                    src={url}
+                                    alt={`Foto ${idx + 1}`}
+                                    loading="lazy"
+                                    className="w-full h-full object-cover"
+                                  />
+                                  {idx === 3 && extra > 0 && (
+                                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-lg font-bold">
+                                      +{extra}
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
                           </div>
                         )}
 
-                        {/* Voice Note / Audio */}
-                        {msg.media_type === 'audio' && msg.media_url && (
-                          <div onClick={(e) => e.stopPropagation()} className="min-w-[210px] py-0.5">
-                            <audio src={msg.media_url} controls preload="metadata" className="w-full h-9" />
+                        {/* Stiker Kustom */}
+                        {msg.media_type === 'sticker' && msg.media_url && (
+                          <div onClick={(e) => e.stopPropagation()} className="py-0.5">
+                            <img
+                              src={msg.media_url}
+                              alt="Stiker"
+                              loading="lazy"
+                              className="w-36 h-36 object-contain rounded-xl"
+                            />
                           </div>
+                        )}
+
+                        {/* Berbagi Lokasi GPS */}
+                        {msg.media_type === 'location' && msg.location_lat != null && msg.location_lng != null && (
+                          <a
+                            href={`https://www.google.com/maps?q=${msg.location_lat},${msg.location_lng}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className={`mb-1.5 block p-3 rounded-xl border min-w-[215px] transition ${
+                              isMine
+                                ? 'bg-black/15 border-white/20 hover:bg-black/25 text-white'
+                                : isDark
+                                  ? 'bg-zinc-900/80 border-zinc-700 hover:bg-zinc-900 text-zinc-100'
+                                  : 'bg-zinc-50 border-zinc-200 hover:bg-zinc-100 text-zinc-900'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <div
+                                className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                  isMine ? 'bg-white/20 text-white' : 'bg-emerald-500/15 text-emerald-500'
+                                }`}
+                              >
+                                <Navigation className="w-4 h-4" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-bold leading-tight">Lokasi Dibagikan</p>
+                                <p className={`text-[10px] truncate mt-0.5 ${isMine ? 'text-blue-100/85' : 'text-zinc-400'}`}>
+                                  {Number(msg.location_lat).toFixed(5)}, {Number(msg.location_lng).toFixed(5)}
+                                </p>
+                              </div>
+                              <ExternalLink className="w-3.5 h-3.5 opacity-75 shrink-0" />
+                            </div>
+                            <div
+                              className={`mt-2 pt-2 border-t text-[11px] font-semibold flex items-center justify-center gap-1 ${
+                                isMine ? 'border-white/15 text-white' : 'border-zinc-500/20 text-blue-600'
+                              }`}
+                            >
+                              <MapPin className="w-3.5 h-3.5" /> Buka di Google Maps
+                            </div>
+                          </a>
+                        )}
+
+                        {/* Video Normal + Tombol Perbesar & Simpan */}
+                        {msg.media_type === 'video' && msg.media_url && (
+                          <div onClick={(e) => e.stopPropagation()} className="mb-1.5 space-y-1.5">
+                            <div className="relative">
+                              <video
+                                src={msg.media_url}
+                                controls
+                                playsInline
+                                preload="metadata"
+                                className="max-h-64 w-full rounded-xl bg-black"
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setVideoViewer({ src: msg.media_url, fileName: msg.file_name || '' })
+                                }
+                                title="Perbesar Video"
+                                className="absolute top-2 right-2 p-1.5 rounded-full bg-black/65 hover:bg-black/85 text-white backdrop-blur-xs transition"
+                              >
+                                <Maximize2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setVideoViewer({ src: msg.media_url, fileName: msg.file_name || '' })
+                                }
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${
+                                  isMine
+                                    ? 'bg-white/15 hover:bg-white/25 text-white'
+                                    : isDark
+                                      ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+                                      : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
+                                }`}
+                              >
+                                <Maximize2 className="w-3 h-3" /> Perbesar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveMedia(msg)}
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${
+                                  isMine
+                                    ? 'bg-white/15 hover:bg-white/25 text-white'
+                                    : isDark
+                                      ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+                                      : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
+                                }`}
+                              >
+                                {savingMediaId === msg.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Download className="w-3 h-3" />
+                                )}
+                                Simpan
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Voice Note dengan Kontrol Kecepatan (1x / 1.5x / 2x) */}
+                        {msg.media_type === 'audio' && msg.media_url && (
+                          <VoiceNotePlayer src={msg.media_url} isMine={isMine} isDark={isDark} />
                         )}
 
                         {/* Dokumen & File Umum */}
@@ -1414,7 +1747,7 @@ function ChatRoomContent() {
                           </div>
                         )}
 
-                        {msg.content && (
+                        {msg.content && msg.media_type !== 'location' && (
                           <>
                             <p className="whitespace-pre-wrap leading-relaxed">
                               {renderHighlightedText(msg.content)}
@@ -1576,6 +1909,20 @@ function ChatRoomContent() {
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {pendingMedia.type === 'image' && (
+              <button
+                type="button"
+                onClick={() => albumAddInputRef.current?.click()}
+                title="Tambah foto lain jadi Album"
+                className={`px-2 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1 transition ${
+                  isDark
+                    ? 'bg-zinc-800 border-zinc-700 text-zinc-200'
+                    : 'bg-white border-zinc-300 text-zinc-700'
+                }`}
+              >
+                <Plus className="w-3.5 h-3.5" /> Foto
+              </button>
+            )}
             {(pendingMedia.type === 'image' || pendingMedia.type === 'video') && (
               <button
                 type="button"
@@ -1600,6 +1947,71 @@ function ChatRoomContent() {
               <X className="w-4 h-4" />
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Banner Preview Album Multi-Foto */}
+      {pendingAlbum.length > 0 && !isBlocked && (
+        <div
+          className={`px-3 py-2.5 border-t shrink-0 space-y-2 ${
+            isDark ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-50 border-zinc-200'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-blue-600">
+              Album Multi-Foto ({pendingAlbum.length}/10)
+            </span>
+            <div className="flex items-center gap-2">
+              {pendingAlbum.length < 10 && (
+                <button
+                  type="button"
+                  onClick={() => albumAddInputRef.current?.click()}
+                  className="px-2.5 py-1 rounded-lg bg-blue-600 text-white text-[11px] font-semibold flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" /> Tambah
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={clearPendingMedia}
+                className="p-1 text-zinc-400 hover:text-red-500"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
+            {pendingAlbum.map((item, idx) => (
+              <div key={idx} className="relative w-14 h-14 rounded-xl overflow-hidden shrink-0 border border-black/15">
+                <img src={item.previewUrl} alt="" className="w-full h-full object-cover" />
+                <button
+                  type="button"
+                  onClick={() => removeAlbumPhotoAt(idx)}
+                  className="absolute top-0.5 right-0.5 p-0.5 rounded-full bg-black/70 text-white"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Laci Stiker Kustom di Bagian Bawah Chat */}
+      {showStickerDrawer && !isBlocked && (
+        <div
+          className={`px-3 py-3 border-t shrink-0 ${
+            isDark ? 'bg-[#121215] border-zinc-800' : 'bg-white border-zinc-200'
+          }`}
+        >
+          <StickerStudio
+            userId={currentUser?.id}
+            isDark={isDark}
+            stickers={myStickers}
+            onStickersChange={setMyStickers}
+            onSelectSticker={handleSendSticker}
+            compact
+          />
         </div>
       )}
 
@@ -1662,24 +2074,67 @@ function ChatRoomContent() {
             ref={mediaInputRef}
             type="file"
             accept={ANDROID_MEDIA_ACCEPT}
+            multiple
             onChange={handleMediaSelect}
+            className="hidden"
+          />
+          <input
+            ref={albumAddInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={handleAddAlbumPhotos}
             className="hidden"
           />
 
           {!editingMsg && (
-            <button
-              type="button"
-              onClick={() => mediaInputRef.current?.click()}
-              disabled={sending || uploadingVoice}
-              title="Kirim Foto, Video, Audio, atau Dokumen"
-              className={`p-2.5 rounded-xl border transition shrink-0 ${
-                isDark
-                  ? 'bg-zinc-900 border-zinc-700 text-zinc-300'
-                  : 'bg-zinc-100 border-zinc-300 text-zinc-700'
-              }`}
-            >
-              <Paperclip className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowStickerDrawer((s) => !s)}
+                disabled={sending || uploadingVoice}
+                title="Stiker Kustom"
+                className={`p-2.5 rounded-xl border transition shrink-0 ${
+                  showStickerDrawer
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : isDark
+                      ? 'bg-zinc-900 border-zinc-700 text-zinc-300'
+                      : 'bg-zinc-100 border-zinc-300 text-zinc-700'
+                }`}
+              >
+                <Smile className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => mediaInputRef.current?.click()}
+                disabled={sending || uploadingVoice}
+                title="Kirim Foto, Album, Video, Audio, atau Dokumen"
+                className={`p-2.5 rounded-xl border transition shrink-0 ${
+                  isDark
+                    ? 'bg-zinc-900 border-zinc-700 text-zinc-300'
+                    : 'bg-zinc-100 border-zinc-300 text-zinc-700'
+                }`}
+              >
+                <Paperclip className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                onClick={handleSendLocation}
+                disabled={sending || uploadingVoice || sendingLocation}
+                title="Berbagi Lokasi GPS"
+                className={`p-2.5 rounded-xl border transition shrink-0 ${
+                  isDark
+                    ? 'bg-zinc-900 border-zinc-700 text-zinc-300'
+                    : 'bg-zinc-100 border-zinc-300 text-zinc-700'
+                }`}
+              >
+                {sendingLocation ? (
+                  <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                ) : (
+                  <MapPin className="w-5 h-5" />
+                )}
+              </button>
+            </div>
           )}
 
           <textarea
@@ -1704,7 +2159,7 @@ function ChatRoomContent() {
             }`}
           />
 
-          {text.trim() || pendingMedia || editingMsg ? (
+          {text.trim() || pendingMedia || pendingAlbum.length > 0 || editingMsg ? (
             <button
               type="submit"
               disabled={sending || (editingMsg && !text.trim())}
@@ -1886,40 +2341,26 @@ function ChatRoomContent() {
         </div>
       )}
 
-      {/* Modal Fullscreen Foto Biasa */}
-      {lightboxImage && (
-        <div
-          className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4"
-          onClick={() => setLightboxImage(null)}
-        >
-          <div className="absolute top-4 right-4 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                saveMediaToDevice({ url: lightboxImage, mediaType: 'image', isViewOnce: false }).catch(
-                  () => {}
-                );
-              }}
-              title="Simpan Foto ke HP"
-              className="p-2 rounded-full bg-white/15 hover:bg-white/25 text-white"
-            >
-              <Download className="w-5 h-5" />
-            </button>
-            <button
-              onClick={() => setLightboxImage(null)}
-              className="p-2 rounded-full bg-white/15 text-white"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          <img
-            src={lightboxImage}
-            alt="Foto penuh"
-            onClick={(e) => e.stopPropagation()}
-            className="max-w-full max-h-[85vh] rounded-xl object-contain"
-          />
-        </div>
+      {/* Modal Fullscreen Zoom Foto Profil / Chat / Album */}
+      {zoomViewer && (
+        <ZoomableLightbox
+          images={zoomViewer.images || []}
+          initialIndex={zoomViewer.initialIndex || 0}
+          title={zoomViewer.title || ''}
+          subtitle={zoomViewer.subtitle || ''}
+          fallbackInitial={zoomViewer.fallbackInitial || zoomViewer.title || ''}
+          canSave={zoomViewer.canSave !== false}
+          onClose={() => setZoomViewer(null)}
+        />
+      )}
+
+      {/* Modal Fullscreen Perbesar Video */}
+      {videoViewer && (
+        <VideoLightbox
+          src={videoViewer.src}
+          fileName={videoViewer.fileName}
+          onClose={() => setVideoViewer(null)}
+        />
       )}
 
       {/* Modal Teruskan Pesan */}
@@ -2018,11 +2459,28 @@ function ChatRoomContent() {
             </div>
 
             <div className="flex flex-col items-center text-center mb-5">
-              <Avatar
-                src={otherUser.avatar_url}
-                name={otherUser.display_name || otherUser.username}
-                size="xl"
-              />
+              <button
+                type="button"
+                onClick={() =>
+                  setZoomViewer({
+                    images: otherUser.avatar_url ? [otherUser.avatar_url] : [],
+                    initialIndex: 0,
+                    title: otherUser.display_name || otherUser.username,
+                    subtitle: `@${otherUser.username}`,
+                    fallbackInitial: otherUser.display_name || otherUser.username,
+                    canSave: Boolean(otherUser.avatar_url),
+                  })
+                }
+                title="Ketuk untuk memperbesar foto profil"
+                className="rounded-full cursor-zoom-in active:scale-95 transition"
+              >
+                <Avatar
+                  src={otherUser.avatar_url}
+                  name={otherUser.display_name || otherUser.username}
+                  size="xl"
+                />
+              </button>
+              <span className="text-[10px] text-zinc-400 mt-1">Ketuk foto untuk memperbesar</span>
               <h3 className="font-bold text-lg mt-3">
                 {otherUser.display_name || otherUser.username}
               </h3>
