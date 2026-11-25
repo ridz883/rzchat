@@ -862,16 +862,16 @@ export default function AccountHub({
     );
   }
 
-  // TAMPILAN UTAMA TAB AKUN (BANNER FOTO/VIDEO + STATUS TEBAL + 8 MENU)
+  // TAMPILAN UTAMA TAB AKUN (SAMPUL FULL-BLEED + TINGGI + AVATAR HALF-OVERLAP + STATUS SOFT BLUR)
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="max-w-lg mx-auto pb-8">
-        {/* Banner Atas (Mendukung Foto / Video Sampul) */}
+      <div className="w-full pb-8">
+        {/* Banner Sampul Full-Bleed Ujung ke Ujung Tanpa Celah Putih */}
         <div
-          className={`relative h-36 px-4 pt-3 flex items-start justify-between gap-2 overflow-hidden ${
+          className={`relative w-full h-52 px-4 pt-3 flex items-start justify-end overflow-hidden ${
             isDark
               ? 'bg-gradient-to-b from-zinc-900 to-[#09090B]'
-              : 'bg-gradient-to-b from-emerald-500/15 to-zinc-100/60'
+              : 'bg-gradient-to-b from-emerald-500/15 to-zinc-100/80'
           }`}
         >
           {activeBannerUrl && (
@@ -892,57 +892,49 @@ export default function AccountHub({
               />
             )
           )}
-          {activeBannerUrl && <div className="absolute inset-0 bg-black/25" />}
+          {activeBannerUrl && (
+            <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/25 pointer-events-none" />
+          )}
 
-          <button
-            type="button"
-            onClick={() => setSection('account')}
-            title="Atur Foto / Video Sampul"
-            className="relative z-10 px-2.5 py-1.5 rounded-full bg-black/45 hover:bg-black/65 text-white backdrop-blur-xs text-[11px] font-semibold flex items-center gap-1.5 transition"
-          >
-            <ImagePlus className="w-3.5 h-3.5" /> Sampul
-          </button>
-
+          {/* Ikon Share & Edit Minimalis di Pojok Kanan Atas */}
           <div className="relative z-10 flex items-center gap-1.5">
             <button
               type="button"
               onClick={handleShareProfile}
               title="Bagikan Profil"
-              className="p-2 rounded-full bg-black/45 hover:bg-black/65 text-white backdrop-blur-xs transition"
+              className="p-2 rounded-full bg-black/35 hover:bg-black/55 text-white backdrop-blur-md transition"
             >
               <Share2 className="w-4 h-4" />
             </button>
             <button
               type="button"
               onClick={() => setSection('account')}
-              title="Edit Profil"
-              className="p-2 rounded-full bg-black/45 hover:bg-black/65 text-white backdrop-blur-xs transition"
+              title="Edit Profil & Sampul"
+              className="p-2 rounded-full bg-black/35 hover:bg-black/55 text-white backdrop-blur-md transition"
             >
               <Pencil className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        {/* Kartu Profil Tengah */}
-        <div
-          className={`relative z-10 -mt-10 rounded-t-3xl px-5 pt-2 pb-4 flex flex-col items-center text-center ${
-            isDark ? 'bg-[#09090B]' : 'bg-white'
-          }`}
-        >
-          {/* Kapsul Status Singkat (Teks Tebal & Kontras) */}
+        {/* Bagian Profil (Avatar Masuk Setengah ke Sampul + Kapsul Status Soft-Blur di Atasnya) */}
+        <div className="max-w-lg mx-auto px-5 flex flex-col items-center text-center relative z-10 -mt-[78px]">
+          {/* Kapsul Status Tetap di Atas Foto Profil dengan Efek Lembut / Agak Blur */}
           <button
             type="button"
             onClick={() => setSection('account')}
-            className={`-mt-7 mb-2 px-4 py-1 rounded-full text-xs font-extrabold tracking-wide shadow-md border transition ${
+            className={`mb-2 px-3.5 py-1 rounded-full text-xs font-medium backdrop-blur-md border shadow-sm transition ${
               isDark
-                ? 'bg-[#18181C] border-zinc-700 text-white'
-                : 'bg-white border-zinc-300 text-zinc-900'
+                ? 'bg-zinc-900/65 border-white/15 text-zinc-200/80'
+                : 'bg-white/75 border-black/10 text-zinc-700/80'
             }`}
           >
-            {editStatus || profile?.status_text || 'Tersedia'}
+            <span className="blur-[0.35px] opacity-90 tracking-normal">
+              {editStatus || profile?.status_text || 'Tersedia'}
+            </span>
           </button>
 
-          {/* Avatar + Tombol + */}
+          {/* Avatar Masuk Setengah ke Area Sampul */}
           <div className="relative">
             <button
               type="button"
@@ -953,7 +945,9 @@ export default function AccountHub({
                   subtitle: editUsername ? `@${editUsername}` : '',
                 })
               }
-              className="rounded-full cursor-zoom-in ring-4 ring-emerald-500/15"
+              className={`rounded-full cursor-zoom-in ring-4 ${
+                isDark ? 'ring-[#09090B]' : 'ring-white'
+              }`}
             >
               <Avatar
                 src={editAvatar}
@@ -965,7 +959,9 @@ export default function AccountHub({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               title="Ubah Foto Profil"
-              className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-md flex items-center justify-center ring-2 ring-white dark:ring-[#09090B]"
+              className={`absolute bottom-0 right-0 w-8 h-8 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-md flex items-center justify-center ring-2 ${
+                isDark ? 'ring-[#09090B]' : 'ring-white'
+              }`}
             >
               <Plus className="w-4 h-4 stroke-[2.6]" />
             </button>
@@ -992,7 +988,7 @@ export default function AccountHub({
         </div>
 
         {/* Daftar Menu Pengaturan */}
-        <div className="px-2 pt-1 space-y-0.5">
+        <div className="max-w-lg mx-auto px-2 pt-3 space-y-0.5">
           {menuItems.map((item) => {
             const Icon = item.icon;
             return (
