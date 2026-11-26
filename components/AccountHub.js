@@ -28,6 +28,7 @@ import {
   CheckCircle2,
   ImagePlus,
   Download,
+  Ban,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Avatar from './Avatar';
@@ -92,6 +93,12 @@ export default function AccountHub({
   const [vvipMsg, setVvipMsg] = useState('');
   const [vvipList, setVvipList] = useState([]);
 
+  // Kontrol Ban / Blokir Global khusus @dev
+  const [banUsername, setBanUsername] = useState('');
+  const [banBusy, setBanBusy] = useState(false);
+  const [banMsg, setBanMsg] = useState({ type: '', text: '' });
+  const [bannedList, setBannedList] = useState([]);
+
   const loadEvents = async () => {
     if (!user?.id) return;
     setLoadingEvents(true);
@@ -114,9 +121,42 @@ export default function AccountHub({
     setVvipList(data || []);
   };
 
+  const loadBannedUsers = async () => {
+    if (!isDevOwner) return;
+    const { data, error } = await supabase.rpc('dev_get_banned_users');
+    if (!error) setBannedList(data || []);
+  };
+
+  const handleSetBan = async (targetUname, shouldBan) => {
+    const clean = String(targetUname || '').trim().replace(/^@/, '');
+    if (!clean || banBusy) return;
+    setBanBusy(true);
+    setBanMsg({ type: '', text: '' });
+    const { data, error } = await supabase.rpc('dev_set_user_ban', {
+      p_target_username: clean,
+      p_is_banned: shouldBan,
+    });
+    setBanBusy(false);
+    if (error) {
+      setBanMsg({ type: 'error', text: 'Gagal: ' + error.message });
+      return;
+    }
+    setBanUsername('');
+    setBanMsg({
+      type: 'ok',
+      text: shouldBan
+        ? '@' + data.username + ' berhasil diblokir (stealth error aktif)'
+        : 'Blokir untuk @' + data.username + ' berhasil dicabut',
+    });
+    loadBannedUsers();
+  };
+
   useEffect(() => {
     if (section === 'events') loadEvents();
-    if (section === 'account' && isDevOwner) loadVvipUsers();
+    if (section === 'account' && isDevOwner) {
+      loadVvipUsers();
+      loadBannedUsers();
+    }
   }, [section, isDevOwner]);
 
   const handleBannerSelect = async (e) => {
@@ -450,6 +490,78 @@ export default function AccountHub({
                               Cabut
                             </button>
                           )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Kontrol Ban / Blokir Global Khusus @dev */}
+              {isDevOwner && (
+                <div className={`rounded-2xl p-4 space-y-3 ${cardClass}`}>
+                  <div className="flex items-center gap-2">
+                    <Ban className="w-4 h-4 text-red-500" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider">
+                      Kontrol Developer · Blokir Pengguna
+                    </h3>
+                  </div>
+                  <p className="text-[11px] text-zinc-400 leading-relaxed">
+                    Akun yang diblokir hanya melihat layar &ldquo;Terjadi kesalahan&rdquo;. Terakhir dilihat tetap tampil normal dan pengguna lain tidak tahu akun ini diblokir.
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={banUsername}
+                      onChange={(e) => setBanUsername(e.target.value)}
+                      placeholder="@username target..."
+                      className={inputClass}
+                    />
+                    <button
+                      type="button"
+                      disabled={banBusy || !banUsername.trim()}
+                      onClick={() => handleSetBan(banUsername, true)}
+                      className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs font-bold shrink-0"
+                    >
+                      {banBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Blokir'}
+                    </button>
+                  </div>
+                  {banMsg.text && (
+                    <p
+                      className={`text-xs font-medium flex items-center gap-1.5 ${
+                        banMsg.type === 'error' ? 'text-red-500' : 'text-emerald-500'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> {banMsg.text}
+                    </p>
+                  )}
+                  {bannedList.length > 0 && (
+                    <div className="pt-2 border-t border-zinc-800/40 space-y-2">
+                      <p className="text-[11px] font-semibold text-zinc-400">
+                        Akun Diblokir ({bannedList.length})
+                      </p>
+                      {bannedList.map((u) => (
+                        <div
+                          key={u.id}
+                          className="flex items-center justify-between gap-2 py-1"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Avatar src={u.avatar_url} name={u.display_name || u.username} size="xs" />
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold truncate">@{u.username}</p>
+                              <p className="text-[10px] text-zinc-400 truncate">
+                                {u.display_name || u.username}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={banBusy}
+                            onClick={() => handleSetBan(u.username, false)}
+                            className="text-[11px] font-semibold text-emerald-500 px-2.5 py-1 rounded-lg hover:bg-emerald-500/10 shrink-0"
+                          >
+                            Buka Blokir
+                          </button>
                         </div>
                       ))}
                     </div>

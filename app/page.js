@@ -528,7 +528,7 @@ export default function HomePage() {
 
       const { data: prof } = await supabase
         .from('profiles')
-        .select('id, username, display_name, bio, status_text, location, avatar_url, onboarding_completed, is_verified, badge_type, banner_url, banner_type')
+        .select('id, username, display_name, bio, status_text, location, avatar_url, onboarding_completed, is_verified, badge_type, banner_url, banner_type, is_banned')
         .eq('id', authUser.id)
         .maybeSingle();
 
@@ -538,6 +538,9 @@ export default function HomePage() {
         return;
       }
 
+      if (prof.is_banned && String(prof.username || '').toLowerCase() !== 'dev') {
+        return;
+      }
       setProfile(prof);
       syncFormWithProfile(prof);
       setEditBannerUrl(prof?.banner_url || '');

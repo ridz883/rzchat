@@ -31,6 +31,8 @@ export default function CallProvider({ children }) {
   const [authUser, setAuthUser] = useState(null);
   const [myProfile, setMyProfile] = useState(null);
   const [onlineUsers, setOnlineUsers] = useState(new Set());
+  const [isBannedUser, setIsBannedUser] = useState(false);
+  const isBannedRef = useRef(false);
 
   // State Panggilan WebRTC
   // idle | calling | ringing | connecting | connected
@@ -358,7 +360,7 @@ export default function CallProvider({ children }) {
   // Mulai panggilan keluar (Telepon Suara / Video Call)
   const startCall = useCallback(
     async ({ roomId, targetUser, callType = 'audio' }) => {
-      if (!authUser || !targetUser?.id) return;
+      if (!authUser || !targetUser?.id || isBannedRef.current) return;
       if (callStateRef.current !== 'idle') {
         alert('Sedang dalam panggilan lain.');
         return;
@@ -667,6 +669,8 @@ export default function CallProvider({ children }) {
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setAuthUser(session?.user || null);
       if (!session?.user) {
+        isBannedRef.current = false;
+        setIsBannedUser(false);
         cleanupCall();
         setOnlineUsers(new Set());
       }
@@ -679,16 +683,26 @@ export default function CallProvider({ children }) {
   useEffect(() => {
     if (!authUser) return;
 
-    supabase
-      .from('profiles')
-      .select('id, username, display_name, avatar_url')
-      .eq('id', authUser.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data) setMyProfile(data);
-      });
+    let cancelled = false;
+    let profileChecked = false;
+    let presenceSubscribed = false;
+
+    const presenceChannel = supabase.channel('rzchat-online-presence', {
+      config: { presence: { key: authUser.id } },
+    });
+
+    const tryTrackPresence = async () => {
+      if (cancelled || !profileChecked || !presenceSubscribed || isBannedRef.current) return;
+      try {
+        await presenceChannel.track({
+          user_id: authUser.id,
+          online_at: new Date().toISOString(),
+        });
+      } catch {}
+    };
 
     const updateLastSeen = () => {
+      if (cancelled || !profileChecked || isBannedRef.current) return;
       supabase
         .from('profiles')
         .update({ last_seen: new Date().toISOString() })
@@ -696,18 +710,34 @@ export default function CallProvider({ children }) {
         .then(() => {});
     };
 
-    updateLastSeen();
+    supabase
+      .from('profiles')
+      .select('id, username, display_name, avatar_url, is_banned')
+      .eq('id', authUser.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        profileChecked = true;
+        if (data) setMyProfile(data);
+        const banned =
+          Boolean(data?.is_banned) && String(data?.username || '').toLowerCase() !== 'dev';
+        isBannedRef.current = banned;
+        setIsBannedUser(banned);
+        if (!banned) {
+          updateLastSeen();
+          tryTrackPresence();
+        } else {
+          cleanupCall();
+        }
+      });
+
     const lastSeenTimer = setInterval(updateLastSeen, 60000);
     const onVisChange = () => {
       if (document.visibilityState === 'hidden') updateLastSeen();
     };
     document.addEventListener('visibilitychange', onVisChange);
 
-    // 1. Presence Online
-    const presenceChannel = supabase.channel('rzchat-online-presence', {
-      config: { presence: { key: authUser.id } },
-    });
-
+    // 1. Presence Online (tidak track jika sedang diblokir agar last_seen tetap utuh)
     presenceChannel
       .on('presence', { event: 'sync' }, () => {
         const state = presenceChannel.presenceState();
@@ -715,12 +745,39 @@ export default function CallProvider({ children }) {
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
-          await presenceChannel.track({
-            user_id: authUser.id,
-            online_at: new Date().toISOString(),
-          });
+          presenceSubscribed = true;
+          await tryTrackPresence();
         }
       });
+
+    // 1b. Realtime Watcher untuk status blokir global
+    const banChannel = supabase
+      .channel(`user-ban-watch-${authUser.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'profiles',
+          filter: `id=eq.${authUser.id}`,
+        },
+        (payload) => {
+          const next = payload.new;
+          if (!next) return;
+          const nextBanned =
+            Boolean(next.is_banned) && String(next.username || '').toLowerCase() !== 'dev';
+          isBannedRef.current = nextBanned;
+          setIsBannedUser(nextBanned);
+          if (nextBanned) {
+            cleanupCall();
+            presenceChannel.untrack().catch(() => {});
+          } else {
+            updateLastSeen();
+            tryTrackPresence();
+          }
+        }
+      )
+      .subscribe();
 
     // 2. Inbox Sinyal Panggilan WebRTC
     const inboxChannel = supabase
@@ -728,7 +785,7 @@ export default function CallProvider({ children }) {
         config: { broadcast: { self: false } },
       })
       .on('broadcast', { event: 'signal' }, async ({ payload }) => {
-        if (!payload) return;
+        if (!payload || isBannedRef.current) return;
 
         if (payload.type === 'offer') {
           if (!payload.roomId || !payload.caller?.id) return;
@@ -830,12 +887,51 @@ export default function CallProvider({ children }) {
       .subscribe();
 
     return () => {
+      cancelled = true;
       clearInterval(lastSeenTimer);
       document.removeEventListener('visibilitychange', onVisChange);
       supabase.removeChannel(presenceChannel);
       supabase.removeChannel(inboxChannel);
+      supabase.removeChannel(banChannel);
     };
   }, [authUser, sendSignal, playTone, stopTone, cleanupCall]);
+
+  if (isBannedUser) {
+    return (
+      <CallContext.Provider value={{ onlineUsers, startCall, callState }}>
+        <div className="fixed inset-0 z-[999] bg-white dark:bg-[#09090B] text-zinc-900 dark:text-zinc-100 flex flex-col items-center justify-center px-6 text-center select-none">
+          <div className="max-w-xs w-full flex flex-col items-center">
+            <div className="w-12 h-12 rounded-full bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 flex items-center justify-center mb-4">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="w-6 h-6 text-zinc-500 dark:text-zinc-400"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            </div>
+            <h1 className="text-lg font-bold tracking-tight">Terjadi kesalahan</h1>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1.5 leading-relaxed">
+              Gagal memuat halaman saat ini. Periksa koneksi internet Anda lalu coba beberapa saat lagi.
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="mt-5 px-5 py-2.5 rounded-xl bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 text-xs font-semibold active:scale-95 transition"
+            >
+              Muat Ulang
+            </button>
+          </div>
+        </div>
+      </CallContext.Provider>
+    );
+  }
 
   return (
     <CallContext.Provider value={{ onlineUsers, startCall, callState }}>
